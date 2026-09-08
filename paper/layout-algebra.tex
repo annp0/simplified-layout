@@ -1,0 +1,951 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1.1in]{geometry}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage[hidelinks]{hyperref}
+\usepackage{booktabs}
+
+\newtheorem{theorem}{Theorem}
+\newtheorem{lemma}{Lemma}
+\newtheorem{proposition}{Proposition}
+\newtheorem{corollary}{Corollary}
+\theoremstyle{definition}
+\newtheorem{definition}{Definition}
+\newtheorem{remark}{Remark}
+\newtheorem{example}{Example}
+
+\lstset{
+  basicstyle=\ttfamily\small,
+  keywordstyle=\bfseries,
+  columns=fullflexible,
+  keepspaces=true,
+  language=ML,
+  morekeywords={val,type,of,let,match,with},
+}
+
+\newcommand{\bound}[1]{\mathrm{B}\,#1}
+\newcommand{\ax}[2]{\mathrm{Axis}(#1,#2)}
+\newcommand{\bc}[1]{\mathrm{Bcast}(#1)}
+\newcommand{\grp}[1]{\mathrm{Group}[#1]}
+\newcommand{\shape}{\mathrm{shape}}
+\newcommand{\size}{\mathrm{size}}
+\newcommand{\cosize}{\mathrm{cosize}}
+\newcommand{\eval}{\mathrm{eval}}
+\newcommand{\canon}[2]{\langle #1 \rangle_{#2}}
+\newcommand{\logical}{\textrm{logical}}
+\newcommand{\physical}{\textrm{physical}}
+\newcommand{\tv}{\textrm{thread-value}}
+\newcommand{\compose}{\mathrm{compose}}
+\newcommand{\divideop}{\mathrm{divide}}
+\newcommand{\repeatop}{\mathrm{repeat}}
+\newcommand{\interleave}{\mathrm{interleave}}
+\newcommand{\broadcast}{\mathrm{broadcast}}
+\newcommand{\coalesce}{\mathrm{coalesce}}
+\newcommand{\restrict}{\mathrm{restrict}}
+\newcommand{\N}{\mathbb{N}}
+\newcommand{\Z}{\mathbb{Z}}
+
+\title{A Simplified Layout Algebra for GPU Kernels}
+\author{Nan\thanks{\texttt{nan@silares.com}. \emph{TODO: full name and affiliation.}}}
+\date{Draft of \today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+The layout algebra behind NVIDIA's CuTe library describes how tensor
+tiles map onto threads and memory. A layout is a shape with a stride for each
+axis, so the address of a coordinate is the sum of its indices times their
+strides. As formalized by Shah and by Cecka, its
+central operations, such as composition, complement, division, product, are
+guarded by at least six interacting admissibility conditions. We show that this
+complexity is an artifact of a representational choice, not of the domain.
+
+We present a layout algebra in which every layout names the space its inputs
+and outputs live in: logical indices, physical indices, or thread-value
+indices. A layout into logical space must be a bijection from its $N$
+coordinates onto $[0,N)$. A layout into physical space must be alias-free:
+different coordinates land on different addresses. The exception is broadcast,
+where many threads read one value on purpose, and the layout has to mark where
+that happens. Nothing maps out of a physical index.
+
+Composing $f$ with $g$ requires only that $f$'s range be exactly $g$'s
+flattened set of coordinates. To emit the index arithmetic, naively, we can
+always compute $f$, split that by division and remainder into $g$'s
+coordinates, and feed it into $g$. Often the composite can be simplified to a
+layout as well. We show that if it can be written this way the form is unique, and we emit that simplified
+form.
+
+A warp's or a thread's slice is a \emph{restriction}. A restricted layout is no
+longer composable, which forces the user to settle the whole view of a tile
+before taking slices.
+
+We validate the algebra by showing that CuTe's operations, such as composition,
+complement, and division, can be reproduced in it. Furthermore, we provide an
+implementation in OCaml, and use it to rederive the atoms and usage patterns of
+CuTe. 
+
+The implementation is roughly 900 lines of code.
+\end{abstract}
+
+\section{Introduction}\label{sec:intro}
+
+For GPU kernels, it is important to have a scheme for describing how to move
+tiles of tensors between global memory, shared memory and registers. The de
+facto vocabulary for such schemes is the CuTe layout algebra underlying
+NVIDIA's CUTLASS library~\cite{cutedocs,cecka}. The most fundamental concept
+is the layout, which we shall reuse heavily.
+
+\begin{definition}[Layout]\label{def:layout}
+A \emph{shape} is a positive integer $n$, or a tuple $(S_1,\dots,S_k)$ of
+shapes; its \emph{size} is $\size n = n$ and
+$\size (S_1,\dots,S_k) = \prod_i \size S_i$. A \emph{coordinate} of $S$ is
+an integer $i \in [0,n)$, respectively a tuple $(c_1,\dots,c_k)$ of
+coordinates of the $S_i$; write $\mathrm{Coord}(S)$ for the set of them. A
+\emph{layout} $S{:}D$ is a shape $S$ together with a \emph{stride} $D$ of the
+same structure: an integer where $S$ is a positive integer, and a tuple
+$(D_1,\dots,D_k)$ where $S$ is $(S_1,\dots,S_k)$. Its index function
+$\mathrm{Coord}(S) \to \N$ is defined by recursion on the shape,
+\[
+(n{:}d)(i) = i\,d,
+\qquad
+\big((S_1,\dots,S_k){:}(D_1,\dots,D_k)\big)(c_1,\dots,c_k)
+= \sum_{j=1}^{k} (S_j{:}D_j)(c_j).
+\] Flattening is a bijection $\canon{\cdot}{S} : \mathrm{Coord}(S) \to
+[0,\size S)$, taken row-major, so that the last component varies fastest, with
+inverse $\mathrm{unflatten}_S$. A coordinate may therefore be given as a single
+integer, and we say that integer \emph{is} the coordinate. The \emph{cosize} of the layout is the least $N$ with its
+image inside $[0,N)$, which is one plus the largest value it takes. The layout
+is \emph{dense} when its image is an initial segment $[0,N)$ of the integers,
+and a \emph{dense bijection} when it is moreover injective, in which case
+$N = \size S$ and every value below $N$ is taken exactly once. A
+\emph{mode} is one entry of the shape together with the matching entry of the
+stride. Two layouts \emph{concatenate}: for $A = S{:}D$ and $B = S'{:}D'$, the
+layout $(A,B)$ is $(S,S'){:}(D,D')$, and it sends $(c,c')$ to $A(c) + B(c')$.
+\end{definition}
+
+Layouts are fundamentally the correct concept here, because physical memory is
+linearly addressed while the logical space is multidimensional and dense as we
+imagine it. They are a natural way to abstract and describe those mappings.
+
+The algebra has four operations. Three of them, composition, complement and
+logical division, are formalized by Shah~\cite{shah}; the fourth, logical
+product, we take from the CUTLASS implementation. The \emph{complement} of a
+layout
+$B = (N_0,\dots,N_\alpha){:}(d_0,\dots,d_\alpha)$, sorted by stride, with
+respect to an integer $M$, is
+\[
+B^{*}_{M} \;=\;
+\Big(d_0,\ \tfrac{d_1}{N_0 d_0},\ \dots,\ \tfrac{M}{N_\alpha d_\alpha}\Big)
+\;{:}\;
+\Big(1,\ N_0 d_0,\ \dots,\ N_\alpha d_\alpha\Big),
+\]
+chosen so that the concatenation $(B, B^{*}_{M})$ has size $M$ and its layout
+function is a bijection of $[0,M)$ onto itself. \emph{Logical division} is
+$A \mathbin{/} B = A \circ (B, B^{*}_{\size A})$, which reindexes $A$ so that
+one mode runs inside the tile $B$ selects and the other runs across copies of
+it. \emph{Logical product} is $A \otimes B = (A, A^{*}_{M} \circ B)$, where
+$M = \size A \cdot \cosize B$, the smallest $M$ for which the composition is
+defined. Its
+first mode is one copy of $A$, and its second walks $B$ through the addresses
+$A$ does not occupy, so the result is $\size B$ copies of $A$ placed in the
+pattern $B$ names.
+
+These operations are critical for constructing the layouts one usually wants.
+There is, however, a lot of complexity underneath them. Layouts are in general
+non-injective and non-surjective onto $[0,M)$, and CuTe always wants to write
+the composite as a layout again. This causes at least six condition checks. Two are in the complement, whose
+shape entries are quotients and so must divide: $N_{i-1}d_{i-1} \mid d_i$ for
+every $i$, and $N_\alpha d_\alpha \mid M$. The others are in composition.
+Write the flattened shape of $A$ as $M_0 \cdots M_\alpha$. It is \emph{left divisible} by $r$
+when $r = M_0 \cdots M_{i-1} \cdot c$ for some $i$, where $c$ is smaller than
+$M_i$ and divides it, and \emph{weakly left divisible} when the same holds
+except that $c$ need not divide $M_i$. For each mode $(N){:}(r)$ of $B$ this is
+three checks, since the prefix must divide $r$, the leftover $c$ must divide
+$M_i$, and what remains after $r$ must be weakly left divisible by $N$. One
+more is required across modes, that the intervals on which they act be pairwise
+disjoint~\cite{shah}. None of these conditions is visible in the CuTe API,
+yet all of them are visible failures.
+
+We try to resolve those complexities by restricting what a layout can be.
+
+\paragraph{Explicit index spaces.} The input and the output of a layout each
+represent one of three things: a logical index into a tile, a thread-value
+index, or a physical offset in memory. Therefore a layout should declare which of the three its
+input and its output are, and we allow only the maps worth having between them.
+Logical and thread-value indices map into one another in either direction.
+Logical indices map into physical offsets. Nothing maps out of a physical
+offset. By design, a thread reaches memory by composing its map into logical
+space with the storage map.
+
+\paragraph{Requirements that follow from the space.} We allow those maps and
+not others because the three spaces do not carry the same obligations. Logical
+and thread-value indices have to account for their contents losslessly, so a
+map into either must be a dense bijection. Composition can only happen when one
+layout's image and the other's domain agree completely, which is natural
+because a physical offset is forbidden as a domain. A physical offset carries
+far fewer requirements, since gaps in memory are common and sharing one address
+between threads, to read the same element, is often what is wanted, so a map
+into physical need only be alias-free, meaning that distinct coordinates reach
+distinct addresses except where the layout marks a broadcast.
+
+\paragraph{Composition and simplification.} The composite of two layouts is not
+a layout in general. But we can decide if it can be written as a layout, and
+when it is a layout we emit one weighted sum of the coordinates. When it is
+not, we emit the composition literally, at the cost of a longer expression and
+more work at run time.
+
+\section{Our construction of layouts}\label{sec:layouts}
+
+We build on top of Definition~\ref{def:layout}. First we define the spaces.
+
+\begin{definition}[Spaces]\label{def:spaces}
+Each side of a layout carries a space from $\{\logical, \physical, \tv\}$,
+written $A \to B$. A layout may be annotated $A \to B$ for
+$A, B \in \{\logical, \tv\}$, or $\logical \to \physical$, and no other pair is
+constructible. Composition takes $A \to \logical$ and $\logical \to C$ to
+$A \to C$, so $\tv \to \physical$ exists only as a composite.
+\end{definition}
+
+\begin{definition}[Replication]\label{def:linear}
+Extend Definition~\ref{def:layout} by allowing the stride against a positive
+integer $n$ to be the mark $\bot$ in place of an integer, with
+\[
+(n{:}\bot)(i) = 0 \quad\text{for every } i \in [0,n).
+\]
+We denote $\ax{n}{s}$ for $n{:}s$ and $\bc{n}$ for $n{:}\bot$.
+\end{definition}
+
+A zero stride is rejected rather than read as replication. This is because
+replication is legal for reads and not for writes, since simultaneous loads of
+one address are a broadcast while simultaneous stores are a race. It is better
+not to use $0$, so that the two can never be mixed.
+
+\begin{definition}[Swizzled layout]\label{def:swizzle}
+A \emph{swizzle} is a bijection $\physical \to \physical$ of the form
+\[
+\sigma(x) \;=\; x \oplus \big(((x \gg \mathit{src}) \wedge (2^{b}-1)) \ll
+\mathit{dst}\big),
+\]
+its two fields $[\mathit{src},\mathit{src}{+}b)$ and
+$[\mathit{dst},\mathit{dst}{+}b)$ disjoint. A layout $A \to \physical$
+followed by a swizzle is a \emph{swizzled layout}, again $A \to \physical$.
+\end{definition}
+
+A swizzle runs from $\physical$ to $\physical$, so it can only ever be the last
+step, and being a bijection it sends distinct addresses to distinct addresses.
+It therefore leaves the conditions below untouched, and matters only in the
+arithmetic that is finally emitted.
+
+\begin{definition}[Composition]\label{def:compose}
+Let $f : A \to \logical$ and let $g : \logical \to C$ have domain shape $S_g$.
+The \emph{composite} $g \circ f : A \to C$ is defined when $f$ is a dense
+bijection onto $[0, \size S_g)$, and is the map
+\[
+g \circ f \;=\; c \mapsto g\big(\mathrm{unflatten}_{S_g}(f(c))\big),
+\]
+whose domain shape is that of $f$.
+\end{definition}
+
+\begin{definition}[Declared replicas]\label{def:replica}
+For a layout $L$ with domain shape $S$, define a relation $\sim_L$ on
+$\mathrm{Coord}(S)$:
+\begin{itemize}
+\item if $L$ is a layout, $c \sim_L c'$ when $c$ and $c'$ agree at every
+position whose stride is an integer, that is, they differ only at positions
+marked $\bot$;
+\item if $L = g \circ f$ with $g$ of domain shape $S_g$, then $c \sim_L c'$ when
+$\mathrm{unflatten}_{S_g}(f(c)) \sim_g \mathrm{unflatten}_{S_g}(f(c'))$.
+\end{itemize}
+\end{definition}
+
+\begin{definition}[Validity]\label{def:validity}\label{sec:validity}
+Let $L : A \to B$ be a layout with domain shape $S$. Then $L$ is \emph{valid}
+when
+\[
+\begin{cases}
+L \text{ is a dense bijection}
+  & \text{if } B \in \{\logical, \tv\},\\[2pt]
+L(c) = L(c') \implies c \sim_L c'
+  & \text{if } B = \physical.
+\end{cases}
+\]
+It is \emph{write-valid} when $B = \physical$ and in addition
+\[
+L(c) = L(c') \implies c = c'.
+\]
+Only a write-valid layout may be the target of a store.
+\end{definition}
+
+Whether a layout is a dense bijection can be decided without enumeration.
+
+\begin{lemma}[Dense bijections]\label{lem:dense}
+Let $L$ be a layout with no marked positions, its positions carrying sizes
+$n_1,\dots,n_k$ and strides $s_1,\dots,s_k$ with every $n_i \ge 2$, and put
+$N = \prod_i n_i$. Then $L$ is a dense bijection onto $[0,N)$ if and only if,
+after sorting the positions by stride, $s_{(1)} = 1$ and
+$s_{(j+1)} = s_{(j)}\,n_{(j)}$ for every $j$: the sorted strides are the
+running products of the sorted sizes.
+\end{lemma}
+
+\begin{proof}
+($\Leftarrow$) With running-product strides the map is exactly mixed-radix
+representation with radices $n_{(1)},\dots,n_{(k)}$, a bijection onto $[0,N)$.
+Positions of size $1$ contribute nothing and are dropped beforehand.
+
+($\Rightarrow$) Sort the positions by stride and write $N_j = \prod_{i \le j} n_{(i)}$
+(so $N_0 = 1$). \emph{Claim:} $s_{(j)} \le N_{j-1}$ for every $j$. Every image
+value below $s_{(j)}$ comes from a coordinate supported on positions
+$1,\dots,j{-}1$, since a nonzero index at any later position contributes at
+least $s_{(j)}$ and no contribution is negative; those positions produce at
+most $N_{j-1}$ distinct values, so surjectivity onto $[0,s_{(j)})$ forces
+$s_{(j)} \le N_{j-1}$. Consequently
+\[
+\textstyle\sum_j (n_{(j)}-1)\,s_{(j)} \;\le\; \sum_j (n_{(j)}-1)\,N_{j-1}
+\;=\; N - 1,
+\]
+the last equality by telescoping. But the left side is the maximum of the
+image, and surjectivity onto $[0,N)$ requires the maximum to be exactly
+$N-1$. The two sums therefore agree, and since each term on the left is at most
+the corresponding term on the right, they agree termwise; as
+$n_{(j)} - 1 \ge 1$ this gives $s_{(j)} = N_{j-1}$ for every $j$, which is the
+running-product condition.
+\end{proof}
+
+\section{Operations}\label{sec:ops}
+
+The operations below transform layouts, and their behaviour on a swizzle is
+stated where it matters. An \emph{arrangement} is a layout required to be a
+dense bijection, checked by Lemma~\ref{lem:dense} at the call; its strides
+carry order and nothing else. An arrangement cannot express padding, because a
+gap in it would be a whole footprint wide. Padding lives in the strides of the
+tile being copied, and the tile's cosize then spaces the copies.
+
+\begin{description}
+\item[$\mathrm{canonical}(S)$] the row-major layout of $S$: last axis stride
+1, running products leftward. Dense by Lemma~\ref{lem:dense}.
+
+\item[$\mathrm{split}(\mathit{by}{:}S)$] regroups one position
+$\ax{n}{s}$ with $\size S = n$ into the structure of $S$, giving each new
+position the stride $s$ times its running product. The index $i$ is read as the
+$S$-coordinate of $i$, so the map is unchanged. A marked position splits into
+marked positions.
+
+\item[$\divideop(\mathit{by}{:}S)$] \emph{the partition} (CuTe's
+zipped\_divide with a shape tiler). Per axis, size $n_i$ splits into
+$(n_i/k_i, k_i)$ (divisibility required); the pieces regroup as
+$\grp{\text{tile axes}; \text{rest axes}}$ with coordinate
+$((\text{tile}),(\text{which tile}))$. It is the relabeling
+$\rho((t_i),(b_i)) = (b_i k_i + t_i)_i$, a bijection, with
+$\divideop\, t = t \circ \rho$. Every tile is kept, so the rest needs no
+complement operation. Selecting one tile is restriction
+(Section~\ref{sec:restrict}), afterwards.
+
+\item[$\repeatop(\mathit{by})$] copies side by side:
+$\grp{\mathit{by} \times \cosize t;\; t}$, the arrangement's strides scaled to
+footprint units. A dense arrangement over a dense tile is dense, since
+$\cosize t = \size t$ there and the two digit systems concatenate.
+On a swizzled layout, $\repeatop$ is accepted iff both swizzle fields lie
+below the (power-of-two) footprint: multiples of the footprint then commute
+with the swizzle, so each copy is independently swizzled (the multi-stage
+shared-memory buffer); otherwise it rejects---the copies would contaminate one
+another's swizzle.
+
+\item[$\interleave(\mathit{by})$] copies dealt element-wise (CuTe's raked
+product), the mirror image: $\grp{\mathit{by};\; t \times \size(\mathit{by})}$.
+Blocked versus raked is the coalescing distinction: with threads as the
+arrangement, $\interleave$ gives consecutive lanes consecutive addresses.
+No meaning is defined for interleaving a swizzled layout (no kernel pattern
+rakes swizzled tiles); it rejects.
+
+\item[$\broadcast(\mathit{by}{:}S)$] copies at the \emph{same} addresses:
+$\grp{\mathrm{Bcast}\text{-tree of } S;\; t}$. The dual of $\repeatop$; the
+arrangement is a shape because aliased copies have no positions to give.
+Read-legal, write-illegal by the $\mathrm{Bcast}$ rule.
+
+\item[$\coalesce$] flattens nesting, drops positions of size $1$, merges
+$\ax{a}{s'}$ into an inner neighbour $\ax{b}{s}$ when $s' = s\,b$, and merges
+adjacent marked positions. The map is unchanged. It is an optional normal form
+here, never a precondition of anything.
+
+\item[$\mathrm{inverse}$] of a dense bijection, defined on layouts: the index
+$j$ maps to the coordinate sent to $j$, whose position $i$ carries index
+$(j / s_i) \bmod n_i$. The spaces swap, so the inverse of a thread--value map
+$\tv \to \logical$ is the \emph{ownership map} $\logical \to \tv$, which
+element is held by which thread and value. Its use is \emph{retiling}: two
+thread-partitionings of one tile, a copy's fragment and an MMA's operand, are
+related by $\mathrm{inverse}(\mathit{mma}_{TV}) \circ \mathit{copy}_{TV}$,
+carrying a copy coordinate to an element to an MMA coordinate. That
+correspondence is a bijection and need not fix the lane: with 32 lanes holding
+two values each, $\mathit{copy} = 2\,\mathit{lane} + v$ against
+$\mathit{target} = \mathit{lane} + 32\,v$ sends 62 of the 64 coordinates to a
+different lane. A composite is a bijection too, so its inverse function exists, but that
+function need not be a layout. The layout $(3,2){:}(1,3)$ sends the six indices
+to $0,3,1,4,2,5$, and composed with itself it sends them to $0,4,3,2,1,5$: that
+map is its own inverse and is a layout over no refinement of six. An inverse
+may instead be kept as a composite, with the factors inverted in reverse order.
+That needs every factor invertible, so it applies only to chains that stay left
+of $\physical$; storage is alias-free rather than injective and may leave gaps,
+so a composite ending in memory has no inverse at all.
+\end{description}
+
+\begin{proposition}[Closure]\label{prop:closure}
+$\mathrm{split}$, $\divideop$, and $\coalesce$ preserve the function up to the
+stated relabeling, hence preserve density and injectivity. $\repeatop$ and
+$\interleave$ with dense arguments preserve density; with an injective tile
+they preserve injectivity. $\broadcast$ preserves the image and multiplies
+multiplicity uniformly.
+\end{proposition}
+\begin{proof}
+Split and coalesce regroup digits in place, leaving the index unchanged, and
+divide composes per-axis splits with the permutation $\rho$. For $\repeatop$
+the images are
+$\{a \cdot \cosize t + v : a \in \mathrm{Im}(\mathit{by}), v \in
+\mathrm{Im}(t)\}$; density of $\mathit{by}$ makes $a$ range over
+$[0,\size \mathit{by})$ and, for dense $t$, $\cosize t = \size t$, so the two
+digit systems concatenate. Injectivity survives a tile with gaps because
+distinct copies are separated by at least the footprint. $\interleave$ is
+symmetric.
+\end{proof}
+
+\section{Composition}\label{sec:compose}
+
+Composition is the only place two layouts meet, and the type does most of the
+work:
+\[
+\compose : (\alpha, \logical)\ \mathrm{Layout} \to (\logical, \gamma)\
+\mathrm{Layout} \to (\alpha, \gamma)\ \mathrm{Layout}.
+\]
+Physical cannot be an intermediate because no signature accepts it on the
+left, and two thread--value maps cannot be composed with each other because
+they share a codomain, not an interface. The composition chain is therefore
+short and terminal: $(\tv \to \logical)$ maps compose through zero or more
+$(\logical \to \logical)$ relabelings into one $(\logical \to \physical)$
+storage map, after which nothing composes.
+
+The condition on $f$ is decided by Lemma~\ref{lem:dense} when $f$ is a layout
+and by enumeration when it is a composite, which happens in chains. It rejects
+a marked position on the left, since replication is not injective. Nothing else
+is checked.
+
+CuTe's \texttt{composition} of two layouts must return a layout, so it has to
+align the operands' digit structures and succeeds only when their shapes and
+strides divide one another suitably. It carries a second representation,
+\texttt{ComposedLayout}, for the cases where that fails, and that
+representation has a reduced contract: no \texttt{stride()}, alignment queries
+pinned to $1$, a zero-offset requirement when it is the right operand of a
+composition with an ordinary layout, and structural operations delegated to one
+factor. Two separable things are at work here. The spaces and their requirements decide
+which maps may be built at all, which is what CuTe leaves to convention.
+Keeping the operand pair is what removes the divisibility conditions, and
+\texttt{ComposedLayout} shows that CuTe can keep a pair too. The combination is
+what differs: one representation with one contract, whether or not the operands
+would have fused, and the arithmetic recovered afterwards by
+Theorem~\ref{thm:decide}, exactly when it exists.
+
+\begin{example}[A composite that is not a layout]\label{ex:nonstrided}
+Let $f$ be the relabel $(a,b) \mapsto 3a{+}b$ of shape $(2,3)$ and let $g$ be
+the storage $(3,2){:}(1,3)$. Both are valid, and the composite sends the
+size-3 axis at $a = 0$ to the addresses $0,3,1$. No layout has this map, since
+along one axis a layout runs in an arithmetic progression and a prime-sized
+axis cannot be split, so a composition that must return a layout has to reject
+this pair. Here the composite exists and is a bijection onto $[0,6)$, emitted
+as $\lfloor x/2 \rfloor + 3(x \bmod 2)$ for $x = 3a{+}b$, and
+Theorem~\ref{thm:decide} proves that no layout describes it.
+\end{example}
+
+\subsection{Emitting a composite}\label{sec:emit}
+
+The emitter writes Definition~\ref{def:compose} out as an integer expression
+over the composite's coordinate variables:
+\[
+E \;::=\; k \;\mid\; c \;\mid\; \textstyle\sum_i a_i E_i + k \;\mid\;
+\lfloor E / w \rfloor \;\mid\; E \bmod r \;\mid\; E \oplus E \;\mid\;
+\mathrm{let}\ x = E\ \mathrm{in}\ E,
+\]
+with $k, a_i, w, r$ compile-time constants and each coordinate variable $c$
+ranging over $[0, n_c)$, the size of its position. A layout with strides $s_i$
+writes $\sum_i s_i c_i$, and a marked position contributes nothing. A composite
+binds the index $f$ computes and reads $g$'s digits off it: digit $j$,
+of radix $n_j$ and weight $w_j$ (the product of the radices to its right), is
+$\lfloor x / w_j \rfloor \bmod n_j$, without the modulus on the leading digit
+since composability gives $x < \size(g)$. A swizzle likewise binds
+the address it is given and exclusive-ors one shifted field of it. Binding is
+what keeps this small: a stage index is computed once however many digits are
+taken from it. This step cannot fail; it is the pair, written out. For the
+running example---the thread--value map $(cg,(r,v)) \mapsto 4cg + 16r + v$
+onto column-major $(8,16)$ storage---it writes
+\begin{center}\small
+\texttt{let x1 = 4*c0 + 16*c1\_0 + c1\_1 in (x1 / 16) + 8*(x1 \% 16)}.
+\end{center}
+
+When the composite is a layout, its address is a single weighted sum, and this
+expression hides that. Recovering it looks like a simplification problem, and
+we first treated it as one, with a bounds-aware rewrite system of the kind
+Halide~\cite{halide}, TVM~\cite{tvm} and MLIR's affine dialect~\cite{mlir}
+carry. That was the wrong tool. It missed layouts that exist, and where none
+exists it made the code worse, since exposing cancellations means inlining the
+bound index into every digit and splitting the digits apart: on random operands
+that inflated the arithmetic by 45\% over the expression above, in 400 of 628
+cases. The next subsection decides the question instead.
+
+
+\subsection{Deciding whether a composite is a layout}\label{sec:decide}
+
+A composite is a function on a finite box, and at compile time every one of its
+values is available. Whether it is a layout, over a possibly finer shape, is
+therefore decidable by evaluation rather than by searching for a
+representation. The procedure below costs $O(\size)$ evaluations, which is what
+the checks of Section~\ref{sec:validity} already spend, plus work linear in
+each axis.
+
+Fix a map $f : B \to \N$ on the box $B = \prod_{i=1}^{m} [0, n_i)$, and write
+$e_i$ for the unit coordinate on axis $i$ and $\mathbf{0}$ for the origin.
+
+\begin{definition}[Refinement; layout over a refinement]\label{def:refine}
+A \emph{refinement} of axis $i$ is a strictly increasing chain of divisors
+$1 = w_1 \mid w_2 \mid \cdots \mid w_k \mid n_i$ with $w_k < n_i$, presenting
+$c_i$ by its digits $d_j(c_i) = \lfloor c_i / w_j \rfloor \bmod r_j$ with
+$r_j = w_{j+1}/w_j$ and $w_{k+1} = n_i$. Starting at $1$ and ending below $n_i$
+is what makes the digits \emph{cover} the axis: every radix is at least $2$ and
+$\prod_j r_j = n_i$, so $(d_1,\ldots,d_k)$ is a mixed-radix presentation of
+$c_i$. For $n_i = 1$ the chain is empty and there are no digits. A
+\emph{layout over the refinement} is
+$f(c) = k + \sum_{i,j} s_{ij}\, d_j(c_i)$ with integer $k$ and $s_{ij}$,
+where a stride may be zero. The trivial refinement, one digit of radix $n_i$
+per axis, gives the forms that are affine in the coordinates themselves.
+\end{definition}
+
+Being a layout over a refinement of the domain shape is what CuTe's
+composition must produce, and what its admissibility
+conditions are conditions for.
+
+\begin{lemma}[Separability]\label{lem:separable}
+$f$ is a layout over some refinement if and only if
+\begin{equation}\label{eq:sep}
+f(c) = f(\mathbf{0}) + \sum_{i=1}^{m} g_i(c_i), \qquad
+g_i(v) = f(v\,e_i) - f(\mathbf{0}),
+\end{equation}
+and each $g_i$ is a layout over some refinement of $[0, n_i)$.
+\end{lemma}
+\begin{proof}
+($\Rightarrow$) Every digit is a function of one coordinate, so such a layout
+is $f(c) = k + \sum_i h_i(c_i)$ with $h_i = \sum_j s_{ij} d_j$. Evaluating at
+$\mathbf{0}$ and at $v\,e_i$ gives $h_i(v) - h_i(0) = g_i(v)$, so $g_i$ is
+$h_i$ shifted by a constant---a layout over the same refinement---and
+\eqref{eq:sep} holds. ($\Leftarrow$) Sum the per-axis forms.
+\end{proof}
+
+Separability is one pass over the box. It leaves $m$ independent
+one-dimensional problems, and each is settled in time linear in its axis.
+
+\begin{lemma}[Floor form]\label{lem:floor}
+For $w \mid w'$, $\lfloor v/w \rfloor \bmod (w'/w) =
+\lfloor v/w \rfloor - (w'/w)\lfloor v/w' \rfloor$. Hence $g$ is a layout
+over a chain $w_1 \mid \cdots \mid w_k \mid n$ if and only if
+$g(v) = \sum_j a_j \lfloor v/w_j \rfloor$ for integers $a_j$ on the same chain,
+and the two coefficient families determine each other by
+$a_j = s_j - r_{j-1}s_{j-1}$ and $s_j = g(w_j)$.
+\end{lemma}
+\begin{proof}
+The identity is the definition of the remainder, valid because $w \mid w'$.
+Substituting it into $\sum_j s_j d_j$ and collecting the terms in
+$\lfloor v/w_j \rfloor$ gives $a_j = s_j - r_{j-1}s_{j-1}$ with $s_0 = 0$;
+the relation is triangular with unit diagonal, hence invertible over $\Z$.
+Evaluating $\sum_i a_i \lfloor w_j/w_i \rfloor$ at $v = w_j$ kills every term
+with $w_i > w_j$ and leaves $\sum_{i \le j} a_i (w_j/w_i)$, which the same
+recurrence identifies with $s_j$.
+\end{proof}
+
+\begin{theorem}[Linear recognition]\label{thm:decide}
+Let $g : [0,n) \to \Z$ with $g(0) = 0$ and let $h(t) = g(t) - g(t-1)$ for
+$1 \le t < n$. If $n = 1$, return the empty refinement. Otherwise begin
+the refinement with $w_1 = 1$, set $w_{\mathrm{last}} = 1$, and process
+$t = 1, 2, \ldots, n-1$ in order: whenever $h(t) \ne 0$, reject unless
+$t \mid n$ and $w_{\mathrm{last}} \mid t$; otherwise record the coefficient
+$a_t = h(t)$, append $t$ to the refinement if $t > 1$, set
+$w_{\mathrm{last}} = t$, and subtract $a_t$ from $h$ at every multiple of
+$t$. Then $g$ is a layout over some refinement if and
+only if the scan completes without rejecting; the reported weights are
+\emph{necessary} boundaries of any such refinement, so together with $w_1 = 1$
+they are the weights of the coarsest one; the strides are $s_j = g(w_j)$; and
+the whole scan runs in $O(n)$ time.
+\end{theorem}
+\begin{proof}
+By Lemma~\ref{lem:floor} such a layout is equivalent to
+$g = \sum_j a_j \lfloor \cdot/w_j \rfloor$ over a divisor chain ending at $n$.
+First differences of $\lfloor v/w \rfloor$ are the indicator of the multiples
+of $w$, so $h(t) = \sum_j a_j [\,w_j \mid t\,]$. Induct on $t$: when the scan
+reaches $t$, the contributions of all weights below $t$ have been subtracted,
+so the residual $h(t)$ equals $a_t$, the coefficient at weight $t$, which is
+therefore forced---and nonzero exactly when $t$ is a boundary. Necessity of
+the divisibility tests is immediate: the weights of a refinement divide $n$
+and form a chain. Conversely, if the scan completes, the reported weights are
+a chain of divisors of $n$ and the recovered $a_j$ reproduce $g$ by
+construction, so Lemma~\ref{lem:floor} converts them to strides $s_j = g(w_j)$.
+Since each $a_t$ is forced, a boundary with $a_t \ne 0$ appears in every
+refinement admitting a form, which is the claimed necessity. For the running
+time, each accepted weight is a strictly larger multiple of its predecessor,
+so accepted weights at least double; the subtraction loops therefore perform
+fewer than $n + n/2 + n/4 + \cdots < 2n$ updates, alongside the single scan.
+Finally, $w_1 = 1$ belongs to the reported refinement whatever $a_1$ is,
+because every refinement carries it (Definition~\ref{def:refine}); a zero
+coefficient there means a zero stride, not an absent digit. For
+$g(v) = \lfloor v/2 \rfloor$ on $n = 4$ the differences are $0,1,0$ and only
+weight $2$ is reported, but the refinement is $(2,2)$ with strides $(0,1)$, and
+omitting its first digit would leave radices whose product is not $n$. A
+constant $g$---necessarily $0$, since $g(0)=0$---gives the trivial refinement
+at stride $0$.
+\end{proof}
+
+The characterization these two lemmas state---digits as differences of floor
+terms, first differences as indicators of divisibility, and the coefficients
+they force---is also the machinery of Appendix~A.2.1 of Axe~\cite{axe}, whose
+Lemmas~A.3--A.6 and Theorem~A.8 use it to prove a normalized sharded
+representation unique by reconstructing it from the function it induces. We
+claim no novelty for it. What Theorem~\ref{thm:decide} adds is the question
+asked of it: the input is an arbitrary map on a finite box rather than one
+assumed representable, so existence is \emph{decided} and non-representable
+maps are rejected; the extraction is an incremental sieve rather than M\"obius
+inversion over the divisor lattice, which is what gives the linear bound; and a
+rejection is not a dead end, because the emitter has the pipeline of
+Section~\ref{sec:emit} to fall back on.
+
+No factorization and no search over orderings appears anywhere, since the
+boundaries announce themselves. Example~\ref{ex:nonstrided} is settled by the
+scan rather than argued: its size-3 axis has differences $3, -2$, forcing a
+weight at $1$ and again at $2$, and $2 \nmid 3$. Because the procedure reads
+values, a swizzle is no obstacle to it; the layout $2c$ under $\{1;1;0\}$ emits
+as $(2c) \oplus (\lfloor 2c/2 \rfloor \bmod 2)$ and is decided to be $3c$. A
+restriction is decided the same way over its free coordinates, with the pinned
+contribution folded into the constant.
+
+The emitter therefore has two outputs. If the map is a layout over some
+refinement it emits that layout's arithmetic, over the coarsest refinement and
+with the coefficients the map forces, so no form with fewer digits exists.
+Otherwise it emits the expression of Section~\ref{sec:emit}.
+
+
+\section{Restriction}\label{sec:restrict}
+
+A kernel does not use a whole address map. Warp $w$ and thread $t$ each use a
+slice of one. Fixing a coordinate cannot produce a layout, since the fixed
+contribution is a position rather than a pattern, and it cannot be handed back
+as a separate offset either, because $\sigma(64 + x) \ne 64 + \sigma(x)$
+whenever the swizzle reads the fixed bits. So the fixed coordinates are kept
+as data beside the layout.
+
+\begin{definition}[Partial coordinate; restricted layout]
+A \emph{partial coordinate} of shape $S$ is
+$\pi ::= \mathrm{Free} \mid \mathrm{At}\,i \mid
+\mathrm{Parts}[\pi_1,\dots,\pi_k]$, structurally matching $S$ with in-bounds
+indices. A \emph{restricted layout} is a pair $(L, \pi)$ of an
+\emph{unmodified} layout and a partial coordinate of its domain shape. Its
+shape replaces fixed slots by $\bound 1$; its offset function
+\emph{completes} the coordinate (fixed slots take index $0$ and contribute
+their $\mathrm{At}$ index) and evaluates $L$.
+\end{definition}
+
+Nothing is folded or split, so restriction applies to every map, layout or
+composite, swizzled or not, with no case analysis. Only a physical codomain may
+be restricted: choosing which addresses this executor touches is an execution
+decision, whereas density in logical space forbids discarding elements. Slicing
+therefore happens after composition, where the warp and thread coordinates are
+slots of the composite's domain. Restricting again takes the union of the two
+partial coordinates, so slicing by warp and then by thread is associative.
+
+Because layouts and restrictions are closed data, a slice needs no separate
+treatment: the restricted map is decided in its own right over the free
+coordinates, with the pinned contribution folded into the constant, and falls
+back to the pipeline with those variables replaced by their constants. Warp~2's
+slice of the composite above emits $r + 8v + 64$. The per-lane math is
+generated from the layout, not tabulated.
+
+\section{CuTe's operations in this algebra}\label{sec:cute}
+
+We now express CuTe's central operations in this algebra and execute the
+correspondence on NVIDIA's own worked examples~\cite{cutedocs}. (Convention
+translation is mechanical: a CuTe layout's mode list reverses, recursively,
+into our row-major tree; CuTe's $\mathrm{composition}(A,B)$ applies $B$ first
+and is our $\compose$ with $f = B$, $g = A$.)
+
+\paragraph{Composition.} All three documented examples are reproduced as
+functions---our composite agrees pointwise with the strided layout CuTe
+prints, including the mode-splitting example
+$\mathrm{composition}\big((6,2){:}(8,2),\,(4,3){:}(3,1)\big) =
+\big((2,2),3\big){:}\big((24,2),8\big)$. Every published example has a dense
+right operand, so all of them compose here.
+
+\paragraph{Complement.} There is no complement operator here. $\divideop$
+carries the rest by construction, and the density check decides complement's
+defining property. Both directions of
+$\mathrm{complement}(4{:}1, 24) = 6{:}4$ are witnessed by the single
+$\divideop$ of $\mathrm{canonical}(24)$ by $\bound 4$, since tile and rest are
+each other's complements. The strided case $\mathrm{complement}(4{:}2,24) =
+(2,3){:}(1,8)$ comes from dividing the $(12,2)$ reshape. All six documented
+complements are checked to make $(B, B^{*})$ dense onto $[0,24)$.
+
+\paragraph{Division.} CuTe's strided-tiler example
+$\mathrm{logical\_divide}\big((4,2,3){:}(2,1,8),\, 4{:}2\big)$ equals our
+composition with the completed tiler $(B, \mathrm{complement}(B,24))$ on the
+left, which is their division carried out as a composition with a dense
+bijection, on their numbers.
+
+\paragraph{Product, and one divergence.} Their $\mathrm{logical\_product}$
+example is verified against their formula. On a tile with gaps the two differ:
+CuTe's product places copies into the tile's gaps, while $\repeatop$ keeps
+them, since padding is a property of the storage and no operation here
+repurposes it.
+
+\paragraph{Which conditions go, and which stay.} Two kinds of condition have to
+be told apart. The divisibility conditions exist so that composition and
+complement can return a layout: left divisibility, weak left divisibility,
+disjoint intervals of definition, complement's two divisibility requirements,
+and division's lemma that the pair it assembles is admissible in turn. Nothing
+here fuses, so all of those go, and complement goes with them because division
+carries its rest.
+
+What stays is not empty, and none of it is about representation. Composition
+requires the left operand to cover the right operand's domain exactly, which is
+stronger than the containment ordinary function composition needs, and is
+decided for layouts by Lemma~\ref{lem:dense}. A map into $\logical$ or $\tv$
+must be a dense bijection, a map into $\physical$ must be alias-free, and a
+store target must be injective. Three operations carry requirements of their
+own: $\divideop$ needs each axis size divisible by its tile size, $\repeatop$
+on a swizzled layout needs both swizzle fields below the footprint, and
+$\interleave$ rejects a swizzled layout. These are obligations about what a map
+means, not about whether two maps can be written as one.
+
+\section{Coverage of CuTe usage}\label{sec:idioms}
+
+The previous section covered CuTe's operators. This one covers the patterns
+CUTLASS kernels are written with, and how each is expressed here. The last
+column names the suite that executes the expression (Section~\ref{sec:eval});
+a dash means it is expressible but no test exercises it.
+
+\begin{center}\small
+\begin{tabular}{@{}p{0.27\linewidth}p{0.36\linewidth}p{0.29\linewidth}@{}}
+\toprule
+\textbf{CuTe idiom} & \textbf{Here} & \textbf{Verified} \\
+\midrule
+\texttt{make\_layout(shape, stride)} & a layout & throughout \\
+\texttt{composition(A, B)} & $\compose(B, A)$ (kept as the pair) & Suite 1, all three documented examples \\
+\texttt{complement(B, M)} & the rest component of $\divideop$; its defining property decided by the density check & Suite 1, all six documented examples \\
+\texttt{logical\_divide}, \texttt{zipped\_divide} & $\divideop$: $((\text{tile}),(\text{rest}))$, every tile kept & Suite 1 (strided-tiler example via the completed tiler); Suites 2--3 \\
+\texttt{local\_tile} & $\divideop$, then $\restrict$ on the composite pinning the rest coordinate to this block's tile & Suite 2 (warp-tile derivation), Suite 3 \\
+\texttt{local\_partition}, \texttt{partition\_A/B/C}, \texttt{tensor(\_, k)} & $\restrict$ on the composite: pin the executor's coordinates & Suite 3 (stage slice), warp-tile derivation \\
+\texttt{logical\_product}, \texttt{blocked\_product}, \texttt{tile\_to\_shape} & $\repeatop$ with the order as a dense arrangement & Suite 2 (staged buffer; SM90 GMMA accumulator) \\
+\texttt{raked\_product} & $\interleave$ & Suite 2 (blocked vs raked), Suite 3 (copy partition) \\
+stride-0 modes (replication) & $\broadcast$ / marked positions, read-only by rule & Suite 2 (GMMA operand replication) \\
+\texttt{Swizzle<B,M,S>} $\circ$ layout & $\mathrm{with\_swizzle}\ \{B; \mathit{src}; \mathit{dst}\}$ on a storage layout & Suite 2 (SW32/64/128 atoms, bank property) \\
+multi-stage pipeline buffer & $\repeatop$ of the swizzled tile (legality: fields below the footprint) & Suite 2 (3-stage SW128), Suite 3 \\
+\texttt{TiledCopy}: \texttt{partition\_S/D} with vector width & $\divideop$ by the vector, $\interleave$ over lanes (lanes fast $\Rightarrow$ coalesced) & Suite 3 (coalescing, vectorization asserted) \\
+\texttt{TiledMMA}: fragment over a CTA tile & fragment atom $\interleave$d by the warp grid, $\compose$d onto the tile & Suite 2 (SM90 GMMA accumulator from the SM80 $C$ fragment), warp-tile derivation \\
+\texttt{right\_inverse}, \texttt{retile\_S/D} & $\mathrm{inverse}$: the ownership map; retiling is the correspondence $\compose(\mathit{copy}_{TV}, \mathrm{inverse}(\mathit{mma}_{TV}))$ & \texttt{test\_layouts} (inverse law, retile correspondences) \\
+\texttt{coalesce} & $\coalesce$, optional & \texttt{test\_layouts} \\
+\texttt{group\_modes}, \texttt{select}, \texttt{flatten} & tree regrouping of $\mathrm{Group}$; $\coalesce$ & --- \\
+\texttt{recast}, \texttt{upcast} & $\divideop$ by the vector width; the unit change is outside the algebra & --- \\
+TMA box, multicast & $\divideop$ by the box shape; $\broadcast$ across CTAs & --- (box), Suite 2 (replication) \\
+identity tensor + predication & masking, outside the layout algebra (Section~\ref{sec:scope}) & --- \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The middle column uses eight operations, namely $\compose$, $\divideop$,
+$\restrict$, $\repeatop$, $\interleave$, $\broadcast$,
+$\mathrm{with\_swizzle}$ and $\mathrm{inverse}$, together with $\coalesce$. No
+row needs an operation absent from Section~\ref{sec:ops}.
+
+Four rows are unexercised. Mode surgery and unit changes regroup a shape
+without touching composition or tiling. Predication is masking, which
+Section~\ref{sec:scope} places outside the algebra. The TMA box is $\divideop$
+by the box shape, so it uses nothing the verified tiling rows do not; what is
+untested there is the descriptor it feeds, which is not a layout question.
+Composition, tiling and partitioning appear only in verified rows.
+
+\section{Evaluation}\label{sec:eval}
+
+The evaluation is four executable suites over an implementation of roughly
+630 lines of OCaml for the algebra, 130 for the decision procedure and 150 for
+the expression type it emits (1{,}250 with interfaces and their
+documentation), and 1{,}700 lines of tests; every law stated in this paper is
+asserted in them.
+
+\paragraph{Transcription and derivation.} A layout enters a test suite one of
+two ways. A \emph{transcription} copies a published layout and checks
+properties of the data, which tests the representation. A \emph{derivation}
+builds the layout from the operations and compares it against the
+transcription, which tests the algebra. A missing operation is invisible to
+transcription, because the transcriber performs it mentally, and $\divideop$
+went unnoticed here for exactly that reason until a derivation needed it.
+Hardware facts, the PTX fragment tables and the swizzle parameters, are the
+only layouts we transcribe; everything built from them is derived.
+
+\paragraph{Emission oracle.} Every map any suite builds, 178 of them, is
+emitted both ways, as the expression of Section~\ref{sec:emit} and as the
+decided form, and both are evaluated at every coordinate against the map's own
+evaluation. A form affine in the coordinates is fitted to each by enumeration,
+from the origin and the unit coordinates and then checked at every point, and
+the harness asserts that whenever the fit succeeds the decision procedure
+returns exactly that sum, never a different form and never ``none''. Of the
+178, 147 emit as one weighted sum, 9 as digits of a single coordinate, and 22
+as the expression.
+
+\paragraph{Suite 4: random layouts.} Random operands of the two shapes
+composition sees, a dense relabel from a random factorization and a storage map
+of random axis order with random padding. 600 pairs, 300 three-stage chains and
+300 swizzled composites, all checked at every coordinate under the same oracle.
+Of the pairs, 327 are affine in their coordinates and every one is decided to
+that sum, 524 are layouts over some refinement, and the decided forms use 686
+divisions and moduli against the 1{,}026 of the emitted expression. Of the
+chains, 119 are affine and all 119 are decided, which is the case the rewrite
+system missed.
+
+\paragraph{Suite 1: CuTe's central algebra} (Section~\ref{sec:cute}): three
+composition examples, six complements, the strided-tiler division, the product
+example, and the documented divergence.
+
+\paragraph{Suite 2: hardware atoms and layouts derived from them.} The
+transcribed atoms are checked against PTX: SM70 quadpair fragments, the SM80
+\texttt{mma.m16n8k16} $A$, $B$ and $C$ fragments, the \texttt{ldmatrix}
+$m8n8$ fragment, and the GMMA shared-memory swizzle atoms. The last are checked
+against the CUTLASS source to be the family
+$\{B; \mathit{src}{=}6; \mathit{dst}{=}3\}$ over $(8, 8\cdot 2^B)$
+half-elements for $B \in \{0,1,2,3\}$, and the SW128 bank property, that the
+unit index becomes $u \oplus r$, is asserted. Two composites are then derived
+from those atoms rather than transcribed: a three-stage swizzled pipeline
+buffer, and the SM90 GMMA $64{\times}128$ accumulator layout, built from the
+SM80 \texttt{mma.m16n8k16} $C$ fragment by $\divideop(16,8)$, then
+$\interleave$ by the canonical $(4,16)$ rest grid, then composition. It equals
+NVIDIA's printed layout at all 8192 coordinates.
+
+\paragraph{Suite 3: a GEMM mainloop from the operations alone.} The tile is
+$(8,32)$ in halves, global leading dimension 40, 16-byte vectors, one copying
+warp, and two shared-memory stages of the SW64 atom. The writer is
+$\divideop(1,8)$ then $\interleave$ over 32 lanes. The reader is
+$\divideop(8,8)$ then $\interleave$ of the \texttt{ldmatrix} atom over the four
+matrices. Staging is $\repeatop$ on the storage, which exercises the
+swizzled-repeat rule, together with a stage axis on the thread maps, and
+slicing is $\restrict$ on the composites. Four properties are asserted address
+by address. Each lane's global vector is contiguous and consecutive lanes in a
+quad read consecutive 16-byte vectors. Every shared-memory vector is 16-byte
+aligned and contiguous, so the swizzle does not break vectorization. The writer
+and reader thread--value maps are each bijective onto all 512 staged elements.
+And for every logical element, the byte the copy writes is the byte the mma
+fetch reads, across two pipelines derived independently. No composite in the
+suite is written by hand.
+
+\section{Related work}\label{sec:related}
+
+\textbf{CuTe/CUTLASS}~\cite{cutedocs,cecka} is the system under study; its
+operations and their conditions are summarized in
+Section~\ref{sec:intro}. \textbf{Shah}~\cite{shah} formalizes the algebra and gives the admissibility
+conditions. They answer when two layouts fuse into one, which is a question
+this algebra never asks. \textbf{Carlisle et al.}~\cite{categorical} give CuTe's algebra
+categorical foundations. \textbf{Triton's linear layouts}~\cite{triton} model
+layouts as $\mathbb{F}_2$-linear maps on address bits, gaining generic layout
+conversion; that work is about what a
+representation can express, where ours is about which maps may be built, and
+the two combine: an $\mathbb{F}_2$ matrix is one way to implement a swizzle
+here. \textbf{Bhaskaracharya et al.}~\cite{isl} model both CuTe and Triton layouts
+as integer set relations and reason about composition, inversion, and
+complement with a general Presburger solver; the question of
+Section~\ref{sec:decide} is expressible there, and the point of our procedure
+is that on a finite box it needs no solver---one pass of first differences per
+axis. \textbf{Axe}~\cite{axe} unifies tiling, sharding, replication, and offsets
+over named axes, from device meshes down to the lane, warp, and register
+mappings of tensor-core tiles---the same grain as ours, over a wider span---and
+makes replication explicit as we do. Its Appendix~A.2.1 contains the
+characterization Section~\ref{sec:decide} builds on, with the attribution and
+the difference stated there.
+\textbf{Halide}~\cite{halide}, \textbf{TVM}~\cite{tvm}, and
+\textbf{MLIR}~\cite{mlir} carry bounds-aware integer expression simplifiers,
+which is the tool one reaches for first here, and
+Section~\ref{sec:emit} reports why a decision procedure replaced ours.
+
+Taken one at a time the distinctions this design rests on are familiar.
+Replication is explicit in Triton and in Axe, the read and write asymmetry is
+known to every kernel author, and slicing a view without rewriting it is
+ordinary practice. What is new is that all three are enforced together:
+replication is a constructor that may be read and not stored through, nothing
+maps out of an address, and a restriction sits beside an unmodified layout and
+so applies to composites. Those requirements, rather than any condition about
+fusing, are what make a composition legal.
+
+\section{Scope and limitations}\label{sec:scope}
+
+The domain is dense tiled tensor-core kernels, the workload CuTe exists for,
+and every claim here is scoped to it. Ragged tiles are handled by masking,
+which is outside the algebra. Negative strides are unsupported. Tilers for
+$\divideop$ that are layouts rather than shapes are deferred until a kernel
+needs them. Density is decided by Lemma~\ref{lem:dense} without enumeration,
+and the test suite checks that criterion against an enumeration oracle on 400
+random cases; alias-freedom, injectivity, and anything about a composite cost
+$O(\size)$ enumeration when the kernel is compiled, and the decision procedure
+of Section~\ref{sec:decide} costs a further $O(\size)$ evaluations. Deciding
+that question with extents known only at run time is outside this scope, where
+tile shapes are compile-time constants.
+
+\section{The language this serves}\label{sec:coda}
+
+This algebra describes data movement for a warp-level GPU language we are
+building, in which the unit of execution in the source is the warp, lanes are
+SIMD data and divergence cannot be written, warps communicate through pipes
+that compile to barrier machinery, and every buffer through a pipe carries a
+layout from this paper. The language is future work and the algebra stands
+without it.
+
+\begin{thebibliography}{9}
+
+\bibitem{cutedocs}
+NVIDIA. \emph{CuTe: Layouts and Layout Algebra}. CUTLASS documentation,
+\texttt{docs.nvidia.com/cutlass}, accessed 2026.
+
+\bibitem{cecka}
+C.~Cecka. \emph{CuTe Layout Representation and Algebra}. NVIDIA Research;
+arXiv:2603.02298, 2026.
+
+\bibitem{shah}
+J.~Shah. \emph{A Note on the Algebra of CuTe Layouts}. Colfax Research
+technical note, 2024.
+
+\bibitem{categorical}
+J.~Carlisle, J.~Shah, R.~Stern, P.~VanKoughnett.
+\emph{Categorical Foundations for CuTe Layouts}. arXiv:2601.05972, 2026.
+
+\bibitem{triton}
+K.~Zhou, M.~Lezcano, A.~Goucher, A.~Rakhmati, J.~Niu, J.~Lebar, P.~Szczerbuk,
+P.~Bell, P.~Tillet, T.~Raoux, Z.~Moudallal. \emph{Linear Layouts: Robust Code
+Generation of Efficient Tensor Computation Using $\mathbb{F}_2$}. ASPLOS 2026;
+arXiv:2505.23819.
+
+\bibitem{isl}
+S.~G.~Bhaskaracharya, A.~Acharya, B.~Hagedorn, V.~Grover. \emph{Modeling
+Layout Abstractions Using Integer Set Relations}. arXiv:2511.10374, 2025.
+
+\bibitem{axe}
+B.~Hou, H.~Jin, G.~Wang, J.~Chen, Y.~Cai, L.~Yang, Z.~Ye, Y.~Ding, R.~Lai,
+T.~Chen. \emph{Axe: A Simple Unified Layout Abstraction for Machine Learning
+Compilers}. arXiv:2601.19092, 2026.
+
+\bibitem{ptx}
+NVIDIA. \emph{Parallel Thread Execution ISA}. Matrix fragment layout tables,
+accessed 2026.
+
+\bibitem{halide}
+J.~Ragan-Kelley, C.~Barnes, A.~Adams, S.~Paris, F.~Durand, S.~Amarasinghe.
+\emph{Halide: A Language and Compiler for Optimizing Parallelism, Locality,
+and Recomputation in Image Processing Pipelines}. PLDI 2013.
+
+\bibitem{tvm}
+T.~Chen et al. \emph{TVM: An Automated End-to-End Optimizing Compiler for
+Deep Learning}. OSDI 2018.
+
+\bibitem{mlir}
+C.~Lattner et al. \emph{MLIR: Scaling Compiler Infrastructure for Domain
+Specific Computation}. CGO 2021.
+
+\end{thebibliography}
+
+\end{document}
