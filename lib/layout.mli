@@ -11,8 +11,6 @@
     be confused. *)
 type ('dom, 'cod) t
 
-(** The layout constructor. Its domain is bounded to [Space.source]:
-    physical is never a domain, so physical is terminal by type. *)
 (** A layout between the two naming spaces, logical or thread-value on
     both sides. A physical codomain is not reachable here --- see [storage],
     which is the only constructor for one. *)
@@ -39,13 +37,6 @@ val offset : (_, _) t -> Coord.t -> int
     intermediate: no signature accepts one on the left. *)
 val compose : ('a, Space.logical) t -> (Space.logical, 'c) t -> ('a, 'c) t
 
-(** The components of a layout, for inspection and codegen; raise on a
-    composition (whose components are the operands the caller already
-    holds). *)
-val linear : (_, _) t -> Linear.t
-
-val swizzle : (_, _) t -> Swizzle.t option
-
 (** Post-compose an XOR swizzle onto a layout (raises on a composite).
     Physical codomain only, by type: logical spaces are canonical by
     definition. Raises if a swizzle is already set. *)
@@ -58,17 +49,9 @@ val with_swizzle
     build storage and thread maps, which are layouts; a composite is a
     finished address map). See [Linear] for their semantics. *)
 
-val coalesce : ('dom, 'cod) t -> ('dom, 'cod) t
-
 val divide : by:Shape.t -> ('dom, 'cod) t -> ('dom, 'cod) t
-val repeat
-  :  by:Linear.t
-  -> (Space.logical, Space.physical) t
-  -> (Space.logical, Space.physical) t
-val interleave
-  :  by:Linear.t
-  -> (Space.logical, Space.physical) t
-  -> (Space.logical, Space.physical) t
+val repeat : by:Linear.t -> ('dom, 'cod) t -> ('dom, 'cod) t
+val interleave : by:Linear.t -> ('dom, 'cod) t -> ('dom, 'cod) t
 val broadcast
   :  by:Shape.t
   -> (Space.logical, Space.physical) t

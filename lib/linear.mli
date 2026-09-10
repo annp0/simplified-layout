@@ -46,13 +46,6 @@ val split : by:Shape.t -> t -> t
 (** Coordinate variable name for a tree path: [c], [c0], [c1_0], ... *)
 val var_name : int list -> string
 
-(** Canonical-ish minimal form: flattens nesting, drops size-1 leaves,
-    merges an axis into its immediate inner neighbor when
-    [stride_outer = stride_inner * size_inner], and merges adjacent
-    [Broadcast]s. A domain relabeling: same total size, and the same
-    function under canonical indexing (the coalesce law, tested). *)
-val coalesce : t -> t
-
 (** THE partition — CuTe's zipped_divide with a shape tiler.
     [divide ~by t] chops [t] into [by]-shaped tiles: per axis, size n_i
     splits into (n_i / k_i, k_i), and the pieces regroup as
@@ -83,7 +76,8 @@ val repeat : by:t -> t -> t
 val broadcast : by:Shape.t -> t -> t
 
 (** [interleave ~by t]: copies of [t] interleaved element-wise (CuTe's
-    raked product) — the mirror of [repeat]: the copies keep their
+    logical_product with the copies as the first operand) — the mirror
+    of [repeat]: the copies keep their
     strides in element units and the TILE's strides are dilated by the
     cell size. [repeat] lays tiles side by side; [interleave] deals
     them out like cards. [by] is a DENSE arrangement (checked, same rule

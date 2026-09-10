@@ -543,47 +543,6 @@ let () =
     assert (Restricted.offset thread2 Coord.(Tuple [ Idx 0; Idx v ]) = 2 + (8 * v))
   done
 
-(* ---- coalesce: minimal form, same function under canonical indexing ---- *)
-
-let same_function (a : Linear.t) (b : Linear.t) =
-  let sa = Linear.shape a
-  and sb = Linear.shape b in
-  Shape.size sa = Shape.size sb
-  && List.for_all
-       (fun i ->
-         Linear.eval a (Coord.unflatten sa i) = Linear.eval b (Coord.unflatten sb i))
-       (List.init (Shape.size sa) (fun i -> i))
-
-let () =
-  (* fully mergeable nesting collapses to one axis *)
-  assert (
-    Linear.compare (Linear.coalesce partitioned_rows) (Axis { size = 128; stride = 1 }) = 0);
-  (* padding blocks the merge *)
-  let padded : Linear.t =
-    Group [ Axis { size = 8; stride = 17 }; Axis { size = 16; stride = 1 } ]
-  in
-  assert (Linear.compare (Linear.coalesce padded) padded = 0);
-  (* size-1 leaves drop; adjacent Broadcasts merge *)
-  assert (
-    Linear.compare
-      (Linear.coalesce (Group [ Axis { size = 1; stride = 100 }; Axis { size = 8; stride = 1 } ]))
-      (Axis { size = 8; stride = 1 })
-    = 0);
-  assert (
-    Linear.compare
-      (Linear.coalesce (Group [ Broadcast { size = 2 }; Broadcast { size = 3 } ]))
-      (Broadcast { size = 6 })
-    = 0);
-  (* the law, on assorted layouts *)
-  List.iter
-    (fun l -> assert (same_function l (Linear.coalesce l)))
-    [ partitioned_rows
-    ; padded
-    ; tv_linear
-    ; Linear.divide ~by:(Product [ Bound 4; Bound 4 ]) row_major
-    ; Linear.repeat ~by:(Axis { size = 3; stride = 1 }) col_major
-    ]
-
 (* ---- random power-of-two dense pairs: every composite agrees with the
    semantic oracle ---- *)
 

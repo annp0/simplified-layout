@@ -47,19 +47,12 @@ let atom_exn : type a b. op:string -> (a, b) t -> Linear.t * Swizzle.t option =
     raise_s (Sexp.Atom msg)
 ;;
 
-let linear t = fst (atom_exn ~op:"Layout.linear" t)
-let swizzle t = snd (atom_exn ~op:"Layout.swizzle" t)
 
 let with_swizzle t sw =
   Swizzle.validate sw;
   match atom_exn ~op:"Layout.with_swizzle" t with
   | _, Some _ -> raise_s [%message "Layout.with_swizzle: layout already has a swizzle"]
   | linear, None -> Atom { linear; swizzle = Some sw }
-;;
-
-let coalesce t =
-  let linear, swizzle = atom_exn ~op:"Layout.coalesce" t in
-  Atom { linear = Linear.coalesce linear; swizzle }
 ;;
 
 let divide ~by t =

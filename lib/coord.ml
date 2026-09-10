@@ -13,6 +13,7 @@ let rec fits t (shape : Shape.t) =
      | Ok b -> b
      | Unequal_lengths -> false)
   | Idx _, Product _ | Tuple _, Bound _ -> false
+;;
 
 let unflatten (shape : Shape.t) i =
   if i < 0 || i >= Shape.size shape

@@ -94,27 +94,6 @@ let var_name path =
   | _ -> "c" ^ String.concat ~sep:"_" (List.map path ~f:Int.to_string)
 ;;
 
-let coalesce t =
-  let rec leaves = function
-    | Group ts -> List.concat_map ts ~f:leaves
-    | leaf -> [ leaf ]
-  in
-  let merged =
-    (* right to left: the accumulator's head is the immediate inner
-       neighbor of the leaf under consideration *)
-    List.fold_right (leaves t) ~init:[] ~f:(fun leaf acc ->
-      match leaf, acc with
-      | (Axis { size = 1; _ } | Broadcast { size = 1 }), _ -> acc
-      | Axis a, Axis b :: rest when a.stride = b.stride * b.size ->
-        Axis { size = a.size * b.size; stride = b.stride } :: rest
-      | Broadcast a, Broadcast b :: rest -> Broadcast { size = a.size * b.size } :: rest
-      | leaf, acc -> leaf :: acc)
-  in
-  match merged with
-  | [ leaf ] -> leaf
-  | ts -> Group ts
-;;
-
 let divide ~by t =
   let rec go (by : Shape.t) t =
     match by, t with

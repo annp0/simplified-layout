@@ -2,14 +2,7 @@
     nothing else: a STRIDED FORM, [k + sum s_ij * digit_ij(c_i)],
     decided by [Decide]; or, for the maps that have none, the
     composition pipeline written out with one binding per stage, so a
-    stage's index is computed once and its digits read off it.
-
-    There is no rewrite system here. Recovering a strided form by
-    rewriting is both incomplete and, off the strided class,
-    counterproductive: it inlines a shared stage index into every digit
-    and splits the digits apart. Deciding is complete and the pipeline
-    is smaller, so the two together leave rewriting nothing to do.
-    Constant folding is all that remains. *)
+    stage's index is computed once and its digits read off it. *)
 
 type t =
   | Const of int
