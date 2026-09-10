@@ -219,11 +219,13 @@ let () =
     done
   done
 
-(* --- blocked vs raked products (CuTe 02_layout_algebra) ---
-   Two arrangements of 2 copies of the tile (4):(1):
-     blocked ([repeat]):     copies side by side — ((2),(4)) : ((4),(1))
-     raked ([interleave]):   copies dealt out    — ((2),(4)) : ((1),(2))
-   Both dense. *)
+(* --- the two arrangements of 2 copies of the tile (4):(1) ---
+     [repeat]     (CuTe logical_product(tile, copies), blocked_product):
+                  copies side by side — ((2),(4)) : ((4),(1))
+     [interleave] (CuTe logical_product(copies, tile), operands exchanged):
+                  copies dealt out    — ((2),(4)) : ((1),(2))
+   CuTe's raked_product is the FIRST of these with its coordinate groups
+   exchanged per mode, not the second; see test_usage_table. Both dense. *)
 let () =
   let tile : Linear.t = Axis { size = 4; stride = 1 } in
   let copies : Linear.t = Axis { size = 2; stride = 1 } in
