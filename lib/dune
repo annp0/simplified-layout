@@ -1,5 +1,6 @@
 (library
  (name layouts)
+ (public_name layouts)
  (libraries base sexplib0)
  (preprocess
   (pps ppx_jane))

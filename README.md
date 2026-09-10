@@ -36,5 +36,6 @@ otherwise.
 
 ## Build
 
+    opam install . --deps-only
     dune build
     dune test
