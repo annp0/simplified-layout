@@ -1,0 +1,9 @@
+-Q . LayoutAlgebra
+-arg -w -arg -deprecated
+Floors.v
+Chain.v
+Recognize.v
+Shape.v
+Complete.v
+Dense.v
+Check.v

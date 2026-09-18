@@ -7,3 +7,14 @@ _build/
 _opam/
 *.fdb_latexmk
 *.fls
+coq/*.vo
+coq/*.vok
+coq/*.vos
+coq/*.glob
+coq/.*.aux
+coq/Makefile
+coq/Makefile.conf
+coq/.lia.cache
+coq/.nia.cache
+coq_check_probe/
+coq/.Makefile.d
