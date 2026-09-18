@@ -1,0 +1,349 @@
+DIGEST 058cd27ee096a380420b7db2192f7185
+FLayoutAlgebra.Dense
+R1035:1039 Coq.Arith.Arith <> <> lib
+R1041:1043 Coq.micromega.Lia <> <> lib
+R1045:1050 Coq.ZArith.ZArith <> <> lib
+R1052:1055 Coq.Lists.List <> <> lib
+R1065:1077 Coq.Lists.List ListNotations <> mod
+def 1186:1190 <> modes
+R1195:1198 Coq.Init.Datatypes <> list ind
+R1204:1206 Coq.Init.Datatypes <> ::type_scope:x_'*'_x not
+R1201:1203 Coq.Init.Datatypes <> nat ind
+R1207:1209 Coq.Init.Datatypes <> nat ind
+def 1223:1227 <> msize
+R1234:1238 LayoutAlgebra.Dense <> modes def
+binder 1230:1230 <> L:1
+R1243:1245 Coq.Init.Datatypes <> nat ind
+R1258:1258 LayoutAlgebra.Dense <> L:1 var
+R1269:1270 Coq.Lists.List ListNotations ::list_scope:'['_']' not
+R1287:1290 Coq.Init.Datatypes <> ::list_scope:x_'::'_x not
+R1281:1281 Coq.Init.Datatypes <> ::core_scope:'('_x_','_x_','_'..'_','_x_')' not
+R1283:1284 Coq.Init.Datatypes <> ::core_scope:'('_x_','_x_','_'..'_','_x_')' not
+R1286:1286 Coq.Init.Datatypes <> ::core_scope:'('_x_','_x_','_'..'_','_x_')' not
+R1297:1299 Coq.Init.Peano <> ::nat_scope:x_'*'_x not
+R1300:1304 LayoutAlgebra.Dense <> msize:2 def
+def 1532:1540 <> sizes_pos
+R1547:1551 LayoutAlgebra.Dense <> modes def
+binder 1543:1543 <> L:4
+R1564:1569 Coq.Lists.List <> Forall ind
+R1599:1599 LayoutAlgebra.Dense <> L:4 var
+binder 1576:1576 <> m:5
+R1583:1586 Coq.Init.Peano <> ::nat_scope:x_'<='_x not
+R1587:1589 Coq.Init.Datatypes <> fst def
+R1591:1591 LayoutAlgebra.Dense <> m:5 var
+prf 1609:1622 <> sizes_pos_tail
+R1631:1633 Coq.Init.Datatypes <> nat ind
+binder 1625:1625 <> n:6
+binder 1627:1627 <> s:7
+R1641:1645 LayoutAlgebra.Dense <> modes def
+binder 1637:1637 <> L:8
+R1675:1678 Coq.Init.Logic <> ::type_scope:x_'->'_x not
+R1652:1660 LayoutAlgebra.Dense <> sizes_pos def
+R1669:1672 Coq.Init.Datatypes <> ::list_scope:x_'::'_x not
+R1663:1663 Coq.Init.Datatypes <> ::core_scope:'('_x_','_x_','_'..'_','_x_')' not
+R1665:1666 Coq.Init.Datatypes <> ::core_scope:'('_x_','_x_','_'..'_','_x_')' not
+R1668:1668 Coq.Init.Datatypes <> ::core_scope:'('_x_','_x_','_'..'_','_x_')' not
+R1664:1664 LayoutAlgebra.Dense <> n:6 var
+R1667:1667 LayoutAlgebra.Dense <> s:7 var
+R1673:1673 LayoutAlgebra.Dense <> L:8 var
+R1679:1687 LayoutAlgebra.Dense <> sizes_pos def
+R1689:1689 LayoutAlgebra.Dense <> L:8 var
+prf 1738:1751 <> sizes_pos_head
+R1760:1762 Coq.Init.Datatypes <> nat ind
+binder 1754:1754 <> n:9
+binder 1756:1756 <> s:10
+R1770:1774 LayoutAlgebra.Dense <> modes def
+binder 1766:1766 <> L:11
+R1804:1807 Coq.Init.Logic <> ::type_scope:x_'->'_x not
+R1781:1789 LayoutAlgebra.Dense <> sizes_pos def
+R1798:1801 Coq.Init.Datatypes <> ::list_scope:x_'::'_x not
+R1792:1792 Coq.Init.Datatypes <> ::core_scope:'('_x_','_x_','_'..'_','_x_')' not
+R1794:1795 Coq.Init.Datatypes <> ::core_scope:'('_x_','_x_','_'..'_','_x_')' not
+R1797:1797 Coq.Init.Datatypes <> ::core_scope:'('_x_','_x_','_'..'_','_x_')' not
+R1793:1793 LayoutAlgebra.Dense <> n:9 var
+R1796:1796 LayoutAlgebra.Dense <> s:10 var
+R1802:1802 LayoutAlgebra.Dense <> L:11 var
+R1810:1813 Coq.Init.Peano <> ::nat_scope:x_'<='_x not
+R1814:1814 LayoutAlgebra.Dense <> n:9 var
+prf 1890:1898 <> msize_pos
+R1905:1909 LayoutAlgebra.Dense <> modes def
+binder 1901:1901 <> L:12
+R1925:1928 Coq.Init.Logic <> ::type_scope:x_'->'_x not
+R1914:1922 LayoutAlgebra.Dense <> sizes_pos def
+R1924:1924 LayoutAlgebra.Dense <> L:12 var
+R1931:1934 Coq.Init.Peano <> ::nat_scope:x_'<='_x not
+R1935:1939 LayoutAlgebra.Dense <> msize def
+R1941:1941 LayoutAlgebra.Dense <> L:12 var
+R2033:2036 Coq.Init.Peano <> ::nat_scope:x_'<='_x not
+R2056:2069 LayoutAlgebra.Dense <> sizes_pos_head thm
+R2033:2036 Coq.Init.Peano <> ::nat_scope:x_'<='_x not
+R2056:2069 LayoutAlgebra.Dense <> sizes_pos_head thm
+R2100:2103 Coq.Init.Peano <> ::nat_scope:x_'<='_x not
+R2104:2108 LayoutAlgebra.Dense <> msize def
+R2139:2152 LayoutAlgebra.Dense <> sizes_pos_tail thm
+R2100:2103 Coq.Init.Peano <> ::nat_scope:x_'<='_x not
+R2104:2108 LayoutAlgebra.Dense <> msize def
+R2139:2152 LayoutAlgebra.Dense <> sizes_pos_tail thm
+ind 2254:2261 <> coord_ok
+constr 2296:2304 <> coord_nil
+constr 2325:2334 <> coord_cons
+R2270:2273 Coq.Init.Logic <> ::type_scope:x_'->'_x not
+R2265:2269 LayoutAlgebra.Dense <> modes def
+R2282:2285 Coq.Init.Logic <> ::type_scope:x_'->'_x not
+R2274:2277 Coq.Init.Datatypes <> list ind
+R2279:2281 Coq.Init.Datatypes <> nat ind
+R2308:2315 LayoutAlgebra.Dense <> coord_ok:13 ind
+R2320:2321 Coq.Lists.List ListNotations ::list_scope:'['_']' not
+R2317:2318 Coq.Lists.List ListNotations ::list_scope:'['_']' not
+binder 2345:2345 <> n:15
+binder 2347:2347 <> s:16
+binder 2349:2349 <> L:17
+binder 2351:2351 <> c:18
+binder 2353:2354 <> cs:19
+R2372:2375 Coq.Init.Logic <> ::type_scope:x_'->'_x not
+R2363:2365 Coq.Init.Peano <> ::nat_scope:x_'<'_x not
+R2362:2362 LayoutAlgebra.Dense <> c:18 var
+R2366:2366 LayoutAlgebra.Dense <> n:15 var
+R2389:2392 Coq.Init.Logic <> ::type_scope:x_'->'_x not
+R2376:2383 LayoutAlgebra.Dense <> coord_ok:13 ind
+R2387:2388 LayoutAlgebra.Dense <> cs:19 var
+R2385:2385 LayoutAlgebra.Dense <> L:17 var
+R2393:2400 LayoutAlgebra.Dense <> coord_ok:13 ind
+R2418:2421 Coq.Init.Datatypes <> ::list_scope:x_'::'_x not
+R2417:2417 LayoutAlgebra.Dense <> c:18 var
+R2422:2423 LayoutAlgebra.Dense <> cs:19 var
+R2409:2412 Coq.Init.Datatypes <> ::list_scope:x_'::'_x not
+R2403:2403 Coq.Init.Datatypes <> ::core_scope:'('_x_','_x_','_'..'_','_x_')' not
+R2405:2406 Coq.Init.Datatypes <> ::core_scope:'('_x_','_x_','_'..'_','_x_')' not
+R2408:2408 Coq.Init.Datatypes <> ::core_scope:'('_x_','_x_','_'..'_','_x_')' not
+R2404:2404 LayoutAlgebra.Dense <> n:15 var
+R2407:2407 LayoutAlgebra.Dense <> s:16 var
+R2413:2413 LayoutAlgebra.Dense <> L:17 var
+scheme 2254:2261 <> coord_ok_ind
+scheme 2254:2261 <> coord_ok_sind
+def 2437:2438 <> ev
+R2445:2449 LayoutAlgebra.Dense <> modes def
+binder 2441:2441 <> L:20
+R2458:2461 Coq.Init.Datatypes <> list ind
+R2463:2465 Coq.Init.Datatypes <> nat ind
+binder 2453:2454 <> cs:21
+R2470:2472 Coq.Init.Datatypes <> nat ind
+R2488:2489 LayoutAlgebra.Dense <> cs:21 var
+R2485:2485 LayoutAlgebra.Dense <> L:20 var
+R2506:2509 Coq.Init.Datatypes <> ::list_scope:x_'::'_x not
+R2500:2500 Coq.Init.Datatypes <> ::core_scope:'('_x_','_x_','_'..'_','_x_')' not
+R2502:2503 Coq.Init.Datatypes <> ::core_scope:'('_x_','_x_','_'..'_','_x_')' not
+R2505:2505 Coq.Init.Datatypes <> ::core_scope:'('_x_','_x_','_'..'_','_x_')' not
+R2515:2518 Coq.Init.Datatypes <> ::list_scope:x_'::'_x not
+R2531:2533 Coq.Init.Peano <> ::nat_scope:x_'+'_x not
+R2527:2529 Coq.Init.Peano <> ::nat_scope:x_'*'_x not
+R2534:2535 LayoutAlgebra.Dense <> ev:22 def
+def 2739:2745 <> running
+R2752:2754 Coq.Init.Datatypes <> nat ind
+binder 2748:2748 <> w:25
+R2762:2766 LayoutAlgebra.Dense <> modes def
+binder 2758:2758 <> L:26
+R2787:2787 LayoutAlgebra.Dense <> L:26 var
+R2798:2799 Coq.Lists.List ListNotations ::list_scope:'['_']' not
+R2804:2807 Coq.Init.Logic <> True ind
+R2819:2822 Coq.Init.Datatypes <> ::list_scope:x_'::'_x not
+R2813:2813 Coq.Init.Datatypes <> ::core_scope:'('_x_','_x_','_'..'_','_x_')' not
+R2815:2816 Coq.Init.Datatypes <> ::core_scope:'('_x_','_x_','_'..'_','_x_')' not
+R2818:2818 Coq.Init.Datatypes <> ::core_scope:'('_x_','_x_','_'..'_','_x_')' not
+R2833:2836 Coq.Init.Logic <> ::type_scope:x_'/\'_x not
+R2829:2831 Coq.Init.Logic <> ::type_scope:x_'='_x not
+R2832:2832 LayoutAlgebra.Dense <> w:25 var
+R2837:2843 LayoutAlgebra.Dense <> running:27 def
+R2847:2849 Coq.Init.Peano <> ::nat_scope:x_'*'_x not
+R2846:2846 LayoutAlgebra.Dense <> w:25 var
+def 2982:2986 <> Dense
+R2993:2995 Coq.Init.Datatypes <> nat ind
+binder 2989:2989 <> w:29
+R3003:3007 LayoutAlgebra.Dense <> modes def
+binder 2999:2999 <> L:30
+R3022:3022 Coq.Init.Logic <> ::type_scope:x_'/\'_x not
+R3097:3103 Coq.Init.Logic <> ::type_scope:x_'/\'_x not
+binder 3030:3031 <> cs:31
+R3047:3050 Coq.Init.Logic <> ::type_scope:x_'->'_x not
+R3034:3041 LayoutAlgebra.Dense <> coord_ok ind
+R3043:3043 LayoutAlgebra.Dense <> L:30 var
+R3045:3046 LayoutAlgebra.Dense <> cs:31 var
+R3051:3057 Coq.Init.Logic <> ::type_scope:'exists'_x_'..'_x_','_x not
+R3059:3060 Coq.Init.Logic <> ::type_scope:'exists'_x_'..'_x_','_x not
+binder 3058:3058 <> k:32
+R3078:3081 Coq.Init.Logic <> ::type_scope:x_'/\'_x not
+R3063:3065 Coq.Init.Peano <> ::nat_scope:x_'<'_x not
+R3062:3062 LayoutAlgebra.Dense <> k:32 var
+R3066:3070 LayoutAlgebra.Dense <> msize def
+R3072:3072 LayoutAlgebra.Dense <> L:30 var
+R3089:3091 Coq.Init.Logic <> ::type_scope:x_'='_x not
+R3082:3083 LayoutAlgebra.Dense <> ev def
+R3085:3085 LayoutAlgebra.Dense <> L:30 var
+R3087:3088 LayoutAlgebra.Dense <> cs:31 var
+R3093:3095 Coq.Init.Peano <> ::nat_scope:x_'*'_x not
+R3092:3092 LayoutAlgebra.Dense <> w:29 var
+R3096:3096 LayoutAlgebra.Dense <> k:32 var
+R3104:3104 Coq.Init.Logic <> ::type_scope:x_'/\'_x not
+R3187:3194 Coq.Init.Logic <> ::type_scope:x_'/\'_x not
+R3283:3283 Coq.Init.Logic <> ::type_scope:x_'/\'_x not
+binder 3112:3112 <> k:33
+R3132:3143 Coq.Init.Logic <> ::type_scope:x_'->'_x not
+R3117:3119 Coq.Init.Peano <> ::nat_scope:x_'<'_x not
+R3116:3116 LayoutAlgebra.Dense <> k:33 var
+R3120:3124 LayoutAlgebra.Dense <> msize def
+R3126:3126 LayoutAlgebra.Dense <> L:30 var
+R3144:3150 Coq.Init.Logic <> ::type_scope:'exists'_x_'..'_x_','_x not
+R3153:3154 Coq.Init.Logic <> ::type_scope:'exists'_x_'..'_x_','_x not
+binder 3151:3152 <> cs:34
+R3168:3171 Coq.Init.Logic <> ::type_scope:x_'/\'_x not
+R3155:3162 LayoutAlgebra.Dense <> coord_ok ind
+R3164:3164 LayoutAlgebra.Dense <> L:30 var
+R3166:3167 LayoutAlgebra.Dense <> cs:34 var
+R3179:3181 Coq.Init.Logic <> ::type_scope:x_'='_x not
+R3172:3173 LayoutAlgebra.Dense <> ev def
+R3175:3175 LayoutAlgebra.Dense <> L:30 var
+R3177:3178 LayoutAlgebra.Dense <> cs:34 var
+R3183:3185 Coq.Init.Peano <> ::nat_scope:x_'*'_x not
+R3182:3182 LayoutAlgebra.Dense <> w:29 var
+R3186:3186 LayoutAlgebra.Dense <> k:33 var
+binder 3202:3203 <> cs:35
+binder 3205:3207 <> cs':36
+R3223:3226 Coq.Init.Logic <> ::type_scope:x_'->'_x not
+R3210:3217 LayoutAlgebra.Dense <> coord_ok ind
+R3219:3219 LayoutAlgebra.Dense <> L:30 var
+R3221:3222 LayoutAlgebra.Dense <> cs:35 var
+R3241:3252 Coq.Init.Logic <> ::type_scope:x_'->'_x not
+R3227:3234 LayoutAlgebra.Dense <> coord_ok ind
+R3236:3236 LayoutAlgebra.Dense <> L:30 var
+R3238:3240 LayoutAlgebra.Dense <> cs':36 var
+R3271:3274 Coq.Init.Logic <> ::type_scope:x_'->'_x not
+R3260:3262 Coq.Init.Logic <> ::type_scope:x_'='_x not
+R3253:3254 LayoutAlgebra.Dense <> ev def
+R3256:3256 LayoutAlgebra.Dense <> L:30 var
+R3258:3259 LayoutAlgebra.Dense <> cs:35 var
+R3263:3264 LayoutAlgebra.Dense <> ev def
+R3266:3266 LayoutAlgebra.Dense <> L:30 var
+R3268:3270 LayoutAlgebra.Dense <> cs':36 var
+R3277:3279 Coq.Init.Logic <> ::type_scope:x_'='_x not
+R3275:3276 LayoutAlgebra.Dense <> cs:35 var
+R3280:3282 LayoutAlgebra.Dense <> cs':36 var
+prf 3478:3490 <> running_dense
+R3497:3499 Coq.Init.Datatypes <> nat ind
+binder 3493:3493 <> w:37
+R3507:3511 LayoutAlgebra.Dense <> modes def
+binder 3503:3503 <> L:38
+R3530:3533 Coq.Init.Logic <> ::type_scope:x_'->'_x not
+R3520:3523 Coq.Init.Peano <> ::nat_scope:x_'<='_x not
+R3524:3524 LayoutAlgebra.Dense <> w:37 var
+R3545:3548 Coq.Init.Logic <> ::type_scope:x_'->'_x not
+R3534:3542 LayoutAlgebra.Dense <> sizes_pos def
+R3544:3544 LayoutAlgebra.Dense <> L:38 var
+R3560:3563 Coq.Init.Logic <> ::type_scope:x_'->'_x not
+R3549:3555 LayoutAlgebra.Dense <> running def
+R3557:3557 LayoutAlgebra.Dense <> w:37 var
+R3559:3559 LayoutAlgebra.Dense <> L:38 var
+R3564:3568 LayoutAlgebra.Dense <> Dense def
+R3570:3570 LayoutAlgebra.Dense <> w:37 var
+R3572:3572 LayoutAlgebra.Dense <> L:38 var
+R3829:3830 Coq.Lists.List ListNotations ::list_scope:'['_']' not
+R3829:3830 Coq.Lists.List ListNotations ::list_scope:'['_']' not
+R4031:4034 Coq.Init.Peano <> ::nat_scope:x_'<='_x not
+R4054:4067 LayoutAlgebra.Dense <> sizes_pos_head thm
+R4031:4034 Coq.Init.Peano <> ::nat_scope:x_'<='_x not
+R4054:4067 LayoutAlgebra.Dense <> sizes_pos_head thm
+R4103:4111 LayoutAlgebra.Dense <> sizes_pos def
+R4127:4140 LayoutAlgebra.Dense <> sizes_pos_tail thm
+R4103:4111 LayoutAlgebra.Dense <> sizes_pos def
+R4127:4140 LayoutAlgebra.Dense <> sizes_pos_tail thm
+R4176:4179 Coq.Init.Peano <> ::nat_scope:x_'<='_x not
+R4180:4184 LayoutAlgebra.Dense <> msize def
+R4204:4212 LayoutAlgebra.Dense <> msize_pos thm
+R4176:4179 Coq.Init.Peano <> ::nat_scope:x_'<='_x not
+R4180:4184 LayoutAlgebra.Dense <> msize def
+R4204:4212 LayoutAlgebra.Dense <> msize_pos thm
+R4249:4252 Coq.Init.Peano <> ::nat_scope:x_'<='_x not
+R4254:4256 Coq.Init.Peano <> ::nat_scope:x_'*'_x not
+R4249:4252 Coq.Init.Peano <> ::nat_scope:x_'<='_x not
+R4254:4256 Coq.Init.Peano <> ::nat_scope:x_'*'_x not
+R4292:4294 Coq.Init.Peano <> ::nat_scope:x_'*'_x not
+R4292:4294 Coq.Init.Peano <> ::nat_scope:x_'*'_x not
+R4518:4520 Coq.Init.Peano <> ::nat_scope:x_'+'_x not
+R4522:4524 Coq.Init.Peano <> ::nat_scope:x_'*'_x not
+R4518:4520 Coq.Init.Peano <> ::nat_scope:x_'+'_x not
+R4522:4524 Coq.Init.Peano <> ::nat_scope:x_'*'_x not
+R4570:4573 Coq.Init.Peano <> ::nat_scope:x_'<='_x not
+R4566:4568 Coq.Init.Peano <> ::nat_scope:x_'+'_x not
+R4574:4578 LayoutAlgebra.Dense <> msize def
+R4570:4573 Coq.Init.Peano <> ::nat_scope:x_'<='_x not
+R4566:4568 Coq.Init.Peano <> ::nat_scope:x_'+'_x not
+R4574:4578 LayoutAlgebra.Dense <> msize def
+R4638:4641 Coq.Init.Peano <> ::nat_scope:x_'*'_x not
+R4648:4648 Coq.Init.Peano <> ::nat_scope:x_'*'_x not
+R4644:4646 Coq.Init.Peano <> ::nat_scope:x_'+'_x not
+R4609:4623 Coq.Arith.PeanoNat Nat lt_le_trans thm
+R4638:4641 Coq.Init.Peano <> ::nat_scope:x_'*'_x not
+R4648:4648 Coq.Init.Peano <> ::nat_scope:x_'*'_x not
+R4644:4646 Coq.Init.Peano <> ::nat_scope:x_'+'_x not
+R4609:4623 Coq.Arith.PeanoNat Nat lt_le_trans thm
+R4680:4696 Coq.Arith.PeanoNat Nat mul_le_mono_l thm
+R4680:4696 Coq.Arith.PeanoNat Nat mul_le_mono_l thm
+R4854:4856 Coq.Init.Logic <> ::type_scope:x_'='_x not
+R4869:4871 Coq.Init.Peano <> ::nat_scope:x_'+'_x not
+R4859:4862 Coq.Init.Peano <> ::nat_scope:x_'*'_x not
+R4868:4868 Coq.Init.Peano <> ::nat_scope:x_'*'_x not
+R4864:4866 Coq.Arith.PeanoNat <> ::nat_scope:x_'/'_x not
+R4873:4877 Coq.Arith.PeanoNat <> ::nat_scope:x_'mod'_x not
+R4896:4911 Coq.Arith.PeanoNat Nat.Div0 div_mod thm
+R4854:4856 Coq.Init.Logic <> ::type_scope:x_'='_x not
+R4869:4871 Coq.Init.Peano <> ::nat_scope:x_'+'_x not
+R4859:4862 Coq.Init.Peano <> ::nat_scope:x_'*'_x not
+R4868:4868 Coq.Init.Peano <> ::nat_scope:x_'*'_x not
+R4864:4866 Coq.Arith.PeanoNat <> ::nat_scope:x_'/'_x not
+R4873:4877 Coq.Arith.PeanoNat <> ::nat_scope:x_'mod'_x not
+R4896:4911 Coq.Arith.PeanoNat Nat.Div0 div_mod thm
+R4943:4945 Coq.Init.Peano <> ::nat_scope:x_'<'_x not
+R4937:4941 Coq.Arith.PeanoNat <> ::nat_scope:x_'mod'_x not
+R4964:4982 Coq.Arith.PeanoNat Nat mod_upper_bound def
+R4943:4945 Coq.Init.Peano <> ::nat_scope:x_'<'_x not
+R4937:4941 Coq.Arith.PeanoNat <> ::nat_scope:x_'mod'_x not
+R4964:4982 Coq.Arith.PeanoNat Nat mod_upper_bound def
+R5016:5018 Coq.Init.Peano <> ::nat_scope:x_'<'_x not
+R5012:5014 Coq.Arith.PeanoNat <> ::nat_scope:x_'/'_x not
+R5019:5023 LayoutAlgebra.Dense <> msize def
+R5051:5077 Coq.Arith.PeanoNat Nat.Div0 div_lt_upper_bound thm
+R5016:5018 Coq.Init.Peano <> ::nat_scope:x_'<'_x not
+R5012:5014 Coq.Arith.PeanoNat <> ::nat_scope:x_'/'_x not
+R5019:5023 LayoutAlgebra.Dense <> msize def
+R5051:5077 Coq.Arith.PeanoNat Nat.Div0 div_lt_upper_bound thm
+R5110:5112 Coq.Arith.PeanoNat <> ::nat_scope:x_'/'_x not
+R5110:5112 Coq.Arith.PeanoNat <> ::nat_scope:x_'/'_x not
+R5160:5160 Coq.Init.Datatypes <> ::list_scope:x_'::'_x not
+R5168:5172 Coq.Init.Datatypes <> ::list_scope:x_'::'_x not
+R5162:5166 Coq.Arith.PeanoNat <> ::nat_scope:x_'mod'_x not
+R5160:5160 Coq.Init.Datatypes <> ::list_scope:x_'::'_x not
+R5168:5172 Coq.Init.Datatypes <> ::list_scope:x_'::'_x not
+R5162:5166 Coq.Arith.PeanoNat <> ::nat_scope:x_'mod'_x not
+R5667:5669 Coq.Init.Logic <> ::type_scope:x_'='_x not
+R5658:5660 Coq.Init.Peano <> ::nat_scope:x_'+'_x not
+R5662:5664 Coq.Init.Peano <> ::nat_scope:x_'*'_x not
+R5672:5674 Coq.Init.Peano <> ::nat_scope:x_'+'_x not
+R5676:5678 Coq.Init.Peano <> ::nat_scope:x_'*'_x not
+R5667:5669 Coq.Init.Logic <> ::type_scope:x_'='_x not
+R5658:5660 Coq.Init.Peano <> ::nat_scope:x_'+'_x not
+R5662:5664 Coq.Init.Peano <> ::nat_scope:x_'*'_x not
+R5672:5674 Coq.Init.Peano <> ::nat_scope:x_'+'_x not
+R5676:5678 Coq.Init.Peano <> ::nat_scope:x_'*'_x not
+R5719:5721 Coq.Init.Logic <> ::type_scope:x_'='_x not
+R5748:5764 Coq.Arith.PeanoNat Nat lt_trichotomy thm
+R5823:5826 Coq.Init.Peano <> ::nat_scope:x_'<='_x not
+R5819:5821 Coq.Init.Peano <> ::nat_scope:x_'+'_x not
+R5894:5897 Coq.Init.Peano <> ::nat_scope:x_'<='_x not
+R5890:5892 Coq.Init.Peano <> ::nat_scope:x_'+'_x not
+R5719:5721 Coq.Init.Logic <> ::type_scope:x_'='_x not
+R5748:5764 Coq.Arith.PeanoNat Nat lt_trichotomy thm
+R5823:5826 Coq.Init.Peano <> ::nat_scope:x_'<='_x not
+R5819:5821 Coq.Init.Peano <> ::nat_scope:x_'+'_x not
+R5894:5897 Coq.Init.Peano <> ::nat_scope:x_'<='_x not
+R5890:5892 Coq.Init.Peano <> ::nat_scope:x_'+'_x not
+R5962:5964 Coq.Init.Logic <> ::type_scope:x_'='_x not
+R5962:5964 Coq.Init.Logic <> ::type_scope:x_'='_x not

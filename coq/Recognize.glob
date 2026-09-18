@@ -1,0 +1,555 @@
+DIGEST 8738224743d481b1e638d000836f22c1
+FLayoutAlgebra.Recognize
+R896:900 Coq.Arith.Arith <> <> lib
+R902:904 Coq.micromega.Lia <> <> lib
+R906:911 Coq.ZArith.ZArith <> <> lib
+R913:916 Coq.Lists.List <> <> lib
+R953:958 LayoutAlgebra.Floors <> <> lib
+R960:964 LayoutAlgebra.Chain <> <> lib
+R974:986 Coq.Lists.List ListNotations <> mod
+prf 1054:1061 <> dsum_app
+R1070:1073 Coq.Init.Datatypes <> list ind
+R1079:1081 Coq.Init.Datatypes <> ::type_scope:x_'*'_x not
+R1076:1078 Coq.Init.Datatypes <> nat ind
+R1082:1082 Coq.Numbers.BinNums <> Z ind
+binder 1064:1064 <> a:1
+binder 1066:1066 <> b:2
+R1091:1093 Coq.Init.Datatypes <> nat ind
+binder 1087:1087 <> t:3
+R1115:1117 Coq.Init.Logic <> ::type_scope:x_'='_x not
+R1100:1103 LayoutAlgebra.Chain <> dsum def
+R1107:1110 Coq.Init.Datatypes <> ::list_scope:x_'++'_x not
+R1106:1106 LayoutAlgebra.Recognize <> a:1 var
+R1111:1111 LayoutAlgebra.Recognize <> b:2 var
+R1114:1114 LayoutAlgebra.Recognize <> t:3 var
+R1126:1128 Coq.ZArith.BinInt <> ::Z_scope:x_'+'_x not
+R1118:1121 LayoutAlgebra.Chain <> dsum def
+R1123:1123 LayoutAlgebra.Recognize <> a:1 var
+R1125:1125 LayoutAlgebra.Recognize <> t:3 var
+R1129:1132 LayoutAlgebra.Chain <> dsum def
+R1134:1134 LayoutAlgebra.Recognize <> b:2 var
+R1136:1136 LayoutAlgebra.Recognize <> t:3 var
+prf 1221:1237 <> divides_ind_above
+R1246:1248 Coq.Init.Datatypes <> nat ind
+binder 1240:1240 <> w:4
+binder 1242:1242 <> t:5
+R1267:1270 Coq.Init.Logic <> ::type_scope:x_'->'_x not
+R1257:1260 Coq.Init.Peano <> ::nat_scope:x_'<='_x not
+R1261:1261 LayoutAlgebra.Recognize <> t:5 var
+R1282:1285 Coq.Init.Logic <> ::type_scope:x_'->'_x not
+R1273:1275 Coq.Init.Peano <> ::nat_scope:x_'<'_x not
+R1272:1272 LayoutAlgebra.Recognize <> t:5 var
+R1276:1276 LayoutAlgebra.Recognize <> w:4 var
+R1301:1303 Coq.Init.Logic <> ::type_scope:x_'='_x not
+R1286:1296 LayoutAlgebra.Floors <> divides_ind def
+R1298:1298 LayoutAlgebra.Recognize <> w:4 var
+R1300:1300 LayoutAlgebra.Recognize <> t:5 var
+R1336:1352 LayoutAlgebra.Floors <> divides_ind_false thm
+R1336:1352 LayoutAlgebra.Floors <> divides_ind_false thm
+R1365:1377 Coq.Arith.PeanoNat Nat mod_small def
+R1365:1377 Coq.Arith.PeanoNat Nat mod_small def
+R1365:1377 Coq.Arith.PeanoNat Nat mod_small def
+prf 1404:1419 <> divides_ind_self
+R1426:1428 Coq.Init.Datatypes <> nat ind
+binder 1422:1422 <> t:6
+R1445:1448 Coq.Init.Logic <> ::type_scope:x_'->'_x not
+R1435:1438 Coq.Init.Peano <> ::nat_scope:x_'<='_x not
+R1439:1439 LayoutAlgebra.Recognize <> t:6 var
+R1464:1466 Coq.Init.Logic <> ::type_scope:x_'='_x not
+R1449:1459 LayoutAlgebra.Floors <> divides_ind def
+R1461:1461 LayoutAlgebra.Recognize <> t:6 var
+R1463:1463 LayoutAlgebra.Recognize <> t:6 var
+R1496:1511 LayoutAlgebra.Floors <> divides_ind_true thm
+R1496:1511 LayoutAlgebra.Floors <> divides_ind_true thm
+R1524:1540 Coq.Arith.PeanoNat Nat.Div0 mod_same thm
+R1524:1540 Coq.Arith.PeanoNat Nat.Div0 mod_same thm
+prf 1746:1755 <> dsum_above
+R1763:1766 Coq.Init.Datatypes <> list ind
+R1772:1774 Coq.Init.Datatypes <> ::type_scope:x_'*'_x not
+R1769:1771 Coq.Init.Datatypes <> nat ind
+R1775:1775 Coq.Numbers.BinNums <> Z ind
+binder 1758:1759 <> ws:7
+R1784:1786 Coq.Init.Datatypes <> nat ind
+binder 1780:1780 <> t:8
+R1805:1808 Coq.Init.Logic <> ::type_scope:x_'->'_x not
+R1795:1798 Coq.Init.Peano <> ::nat_scope:x_'<='_x not
+R1799:1799 LayoutAlgebra.Recognize <> t:8 var
+R1845:1848 Coq.Init.Logic <> ::type_scope:x_'->'_x not
+R1809:1814 Coq.Lists.List <> Forall ind
+R1843:1844 LayoutAlgebra.Recognize <> ws:7 var
+binder 1821:1821 <> p:9
+R1828:1830 Coq.Init.Peano <> ::nat_scope:x_'<'_x not
+R1827:1827 LayoutAlgebra.Recognize <> t:8 var
+R1831:1833 Coq.Init.Datatypes <> fst def
+R1835:1835 LayoutAlgebra.Recognize <> p:9 var
+R1858:1860 Coq.Init.Logic <> ::type_scope:x_'='_x not
+R1849:1852 LayoutAlgebra.Chain <> dsum def
+R1854:1855 LayoutAlgebra.Recognize <> ws:7 var
+R1857:1857 LayoutAlgebra.Recognize <> t:8 var
+R1999:2015 LayoutAlgebra.Recognize <> divides_ind_above thm
+R1999:2015 LayoutAlgebra.Recognize <> divides_ind_above thm
+R1999:2015 LayoutAlgebra.Recognize <> divides_ind_above thm
+def 2338:2345 <> chain_ok
+R2360:2362 Coq.Init.Datatypes <> nat ind
+binder 2348:2351 <> prev:10
+binder 2353:2354 <> lo:11
+binder 2356:2356 <> n:12
+R2371:2374 Coq.Init.Datatypes <> list ind
+R2380:2382 Coq.Init.Datatypes <> ::type_scope:x_'*'_x not
+R2377:2379 Coq.Init.Datatypes <> nat ind
+R2383:2383 Coq.Numbers.BinNums <> Z ind
+binder 2366:2367 <> ws:13
+R2405:2406 LayoutAlgebra.Recognize <> ws:13 var
+R2417:2418 Coq.Lists.List ListNotations ::list_scope:'['_']' not
+R2423:2426 Coq.Init.Logic <> True ind
+R2438:2441 Coq.Init.Datatypes <> ::list_scope:x_'::'_x not
+R2432:2432 Coq.Init.Datatypes <> ::core_scope:'('_x_','_x_','_'..'_','_x_')' not
+R2434:2435 Coq.Init.Datatypes <> ::core_scope:'('_x_','_x_','_'..'_','_x_')' not
+R2437:2437 Coq.Init.Datatypes <> ::core_scope:'('_x_','_x_','_'..'_','_x_')' not
+R2473:2476 Coq.Init.Logic <> ::type_scope:x_'/\'_x not
+R2456:2465 Coq.Arith.PeanoNat Nat divide def
+R2467:2470 LayoutAlgebra.Recognize <> prev:10 var
+R2491:2494 Coq.Init.Logic <> ::type_scope:x_'/\'_x not
+R2477:2486 Coq.Arith.PeanoNat Nat divide def
+R2490:2490 LayoutAlgebra.Recognize <> n:12 var
+R2508:2517 Coq.Init.Logic <> ::type_scope:x_'/\'_x not
+R2498:2501 Coq.Init.Peano <> ::nat_scope:x_'<='_x not
+R2496:2497 LayoutAlgebra.Recognize <> lo:11 var
+R2518:2525 LayoutAlgebra.Recognize <> chain_ok:14 def
+R2535:2535 LayoutAlgebra.Recognize <> n:12 var
+R2530:2530 Coq.Init.Datatypes <> S constr
+prf 2556:2571 <> chain_ok_lo_mono
+R2590:2592 Coq.Init.Datatypes <> nat ind
+binder 2574:2577 <> prev:16
+binder 2579:2580 <> lo:17
+binder 2582:2584 <> lo':18
+binder 2586:2586 <> n:19
+R2601:2604 Coq.Init.Datatypes <> list ind
+R2610:2612 Coq.Init.Datatypes <> ::type_scope:x_'*'_x not
+R2607:2609 Coq.Init.Datatypes <> nat ind
+R2613:2613 Coq.Numbers.BinNums <> Z ind
+binder 2596:2597 <> ws:20
+R2636:2639 Coq.Init.Logic <> ::type_scope:x_'->'_x not
+R2625:2628 Coq.Init.Peano <> ::nat_scope:x_'<='_x not
+R2622:2624 LayoutAlgebra.Recognize <> lo':18 var
+R2629:2630 LayoutAlgebra.Recognize <> lo:17 var
+R2661:2664 Coq.Init.Logic <> ::type_scope:x_'->'_x not
+R2640:2647 LayoutAlgebra.Recognize <> chain_ok def
+R2649:2652 LayoutAlgebra.Recognize <> prev:16 var
+R2654:2655 LayoutAlgebra.Recognize <> lo:17 var
+R2657:2657 LayoutAlgebra.Recognize <> n:19 var
+R2659:2660 LayoutAlgebra.Recognize <> ws:20 var
+R2665:2672 LayoutAlgebra.Recognize <> chain_ok def
+R2674:2677 LayoutAlgebra.Recognize <> prev:16 var
+R2679:2681 LayoutAlgebra.Recognize <> lo':18 var
+R2683:2683 LayoutAlgebra.Recognize <> n:19 var
+R2685:2686 LayoutAlgebra.Recognize <> ws:20 var
+prf 2831:2850 <> chain_ok_weights_pos
+R2865:2867 Coq.Init.Datatypes <> nat ind
+binder 2853:2856 <> prev:21
+binder 2858:2859 <> lo:22
+binder 2861:2861 <> n:23
+R2876:2879 Coq.Init.Datatypes <> list ind
+R2885:2887 Coq.Init.Datatypes <> ::type_scope:x_'*'_x not
+R2882:2884 Coq.Init.Datatypes <> nat ind
+R2888:2888 Coq.Numbers.BinNums <> Z ind
+binder 2871:2872 <> ws:24
+R2909:2912 Coq.Init.Logic <> ::type_scope:x_'->'_x not
+R2898:2901 Coq.Init.Peano <> ::nat_scope:x_'<='_x not
+R2902:2903 LayoutAlgebra.Recognize <> lo:22 var
+R2934:2937 Coq.Init.Logic <> ::type_scope:x_'->'_x not
+R2913:2920 LayoutAlgebra.Recognize <> chain_ok def
+R2922:2925 LayoutAlgebra.Recognize <> prev:21 var
+R2927:2928 LayoutAlgebra.Recognize <> lo:22 var
+R2930:2930 LayoutAlgebra.Recognize <> n:23 var
+R2932:2933 LayoutAlgebra.Recognize <> ws:24 var
+R2938:2948 LayoutAlgebra.Chain <> weights_pos def
+R2950:2951 LayoutAlgebra.Recognize <> ws:24 var
+R3153:3153 Coq.Init.Datatypes <> S constr
+R3153:3153 Coq.Init.Datatypes <> S constr
+def 3217:3221 <> resid
+R3231:3234 Coq.Init.Logic <> ::type_scope:x_'->'_x not
+R3228:3230 Coq.Init.Datatypes <> nat ind
+R3235:3235 Coq.Numbers.BinNums <> Z ind
+binder 3224:3224 <> h:25
+R3245:3248 Coq.Init.Datatypes <> list ind
+R3254:3256 Coq.Init.Datatypes <> ::type_scope:x_'*'_x not
+R3251:3253 Coq.Init.Datatypes <> nat ind
+R3257:3257 Coq.Numbers.BinNums <> Z ind
+binder 3239:3241 <> acc:26
+R3266:3268 Coq.Init.Datatypes <> nat ind
+binder 3262:3262 <> t:27
+R3273:3273 Coq.Numbers.BinNums <> Z ind
+R3283:3285 Coq.ZArith.BinInt <> ::Z_scope:x_'-'_x not
+R3280:3280 LayoutAlgebra.Recognize <> h:25 var
+R3282:3282 LayoutAlgebra.Recognize <> t:27 var
+R3286:3289 LayoutAlgebra.Chain <> dsum def
+R3291:3293 LayoutAlgebra.Recognize <> acc:26 var
+R3295:3295 LayoutAlgebra.Recognize <> t:27 var
+def 3479:3487 <> scan_from
+R3494:3496 Coq.Init.Datatypes <> nat ind
+binder 3490:3490 <> n:28
+R3507:3510 Coq.Init.Logic <> ::type_scope:x_'->'_x not
+R3504:3506 Coq.Init.Datatypes <> nat ind
+R3511:3511 Coq.Numbers.BinNums <> Z ind
+binder 3500:3500 <> h:29
+R3531:3533 Coq.Init.Datatypes <> nat ind
+binder 3515:3519 <> steps:30
+binder 3521:3521 <> t:31
+binder 3523:3527 <> wlast:32
+R3562:3565 Coq.Init.Datatypes <> list ind
+R3571:3573 Coq.Init.Datatypes <> ::type_scope:x_'*'_x not
+R3568:3570 Coq.Init.Datatypes <> nat ind
+R3574:3574 Coq.Numbers.BinNums <> Z ind
+binder 3556:3558 <> acc:33
+R3580:3585 Coq.Init.Datatypes <> option ind
+R3588:3591 Coq.Init.Datatypes <> list ind
+R3597:3599 Coq.Init.Datatypes <> ::type_scope:x_'*'_x not
+R3594:3596 Coq.Init.Datatypes <> nat ind
+R3600:3600 Coq.Numbers.BinNums <> Z ind
+R3615:3619 LayoutAlgebra.Recognize <> steps:30 var
+R3639:3642 Coq.Init.Datatypes <> Some constr
+R3644:3646 LayoutAlgebra.Recognize <> acc:33 var
+R3652:3652 Coq.Init.Datatypes <> S constr
+R3679:3683 LayoutAlgebra.Recognize <> resid def
+R3685:3685 LayoutAlgebra.Recognize <> h:29 var
+R3687:3689 LayoutAlgebra.Recognize <> acc:33 var
+R3691:3691 LayoutAlgebra.Recognize <> t:31 var
+binder 3674:3674 <> r:36
+R3705:3709 Coq.ZArith.BinInt Z eqb def
+R3711:3711 LayoutAlgebra.Recognize <> r:36 var
+R3777:3780 Coq.Init.Datatypes <> andb def
+R3805:3811 Coq.Arith.PeanoNat Nat eqb def
+R3815:3819 Coq.Arith.PeanoNat <> ::nat_scope:x_'mod'_x not
+R3814:3814 LayoutAlgebra.Recognize <> t:31 var
+R3820:3824 LayoutAlgebra.Recognize <> wlast:32 var
+R3783:3789 Coq.Arith.PeanoNat Nat eqb def
+R3793:3797 Coq.Arith.PeanoNat <> ::nat_scope:x_'mod'_x not
+R3792:3792 LayoutAlgebra.Recognize <> n:28 var
+R3798:3798 LayoutAlgebra.Recognize <> t:31 var
+R3909:3912 Coq.Init.Datatypes <> None constr
+R3846:3854 LayoutAlgebra.Recognize <> scan_from:34 def
+R3879:3882 Coq.Init.Datatypes <> ::list_scope:x_'++'_x not
+R3876:3878 LayoutAlgebra.Recognize <> acc:33 var
+R3883:3883 Coq.Lists.List ListNotations ::list_scope:'['_x_']' not
+R3890:3890 Coq.Lists.List ListNotations ::list_scope:'['_x_']' not
+R3884:3884 Coq.Init.Datatypes <> ::core_scope:'('_x_','_x_','_'..'_','_x_')' not
+R3886:3887 Coq.Init.Datatypes <> ::core_scope:'('_x_','_x_','_'..'_','_x_')' not
+R3889:3889 Coq.Init.Datatypes <> ::core_scope:'('_x_','_x_','_'..'_','_x_')' not
+R3885:3885 LayoutAlgebra.Recognize <> t:31 var
+R3888:3888 LayoutAlgebra.Recognize <> r:36 var
+R3873:3873 LayoutAlgebra.Recognize <> t:31 var
+R3868:3868 Coq.Init.Datatypes <> S constr
+R3870:3870 LayoutAlgebra.Recognize <> t:31 var
+R3858:3858 LayoutAlgebra.Recognize <> h:29 var
+R3856:3856 LayoutAlgebra.Recognize <> n:28 var
+R3726:3734 LayoutAlgebra.Recognize <> scan_from:34 def
+R3759:3761 LayoutAlgebra.Recognize <> acc:33 var
+R3753:3757 LayoutAlgebra.Recognize <> wlast:32 var
+R3748:3748 Coq.Init.Datatypes <> S constr
+R3750:3750 LayoutAlgebra.Recognize <> t:31 var
+R3738:3738 LayoutAlgebra.Recognize <> h:29 var
+R3736:3736 LayoutAlgebra.Recognize <> n:28 var
+def 3933:3942 <> first_diff
+R3952:3955 Coq.Init.Logic <> ::type_scope:x_'->'_x not
+R3949:3951 Coq.Init.Datatypes <> nat ind
+R3956:3956 Coq.Numbers.BinNums <> Z ind
+binder 3945:3945 <> g:37
+R3964:3966 Coq.Init.Datatypes <> nat ind
+binder 3960:3960 <> t:38
+R3971:3971 Coq.Numbers.BinNums <> Z ind
+R3979:3981 Coq.ZArith.BinInt <> ::Z_scope:x_'-'_x not
+R3976:3976 LayoutAlgebra.Recognize <> g:37 var
+R3978:3978 LayoutAlgebra.Recognize <> t:38 var
+R3982:3982 LayoutAlgebra.Recognize <> g:37 var
+R3986:3988 Coq.Init.Peano <> ::nat_scope:x_'-'_x not
+R3985:3985 LayoutAlgebra.Recognize <> t:38 var
+def 4009:4012 <> scan
+R4019:4021 Coq.Init.Datatypes <> nat ind
+binder 4015:4015 <> n:39
+R4032:4035 Coq.Init.Logic <> ::type_scope:x_'->'_x not
+R4029:4031 Coq.Init.Datatypes <> nat ind
+R4036:4036 Coq.Numbers.BinNums <> Z ind
+binder 4025:4025 <> g:40
+R4041:4046 Coq.Init.Datatypes <> option ind
+R4049:4052 Coq.Init.Datatypes <> list ind
+R4058:4060 Coq.Init.Datatypes <> ::type_scope:x_'*'_x not
+R4055:4057 Coq.Init.Datatypes <> nat ind
+R4061:4061 Coq.Numbers.BinNums <> Z ind
+R4070:4078 LayoutAlgebra.Recognize <> scan_from def
+R4080:4080 LayoutAlgebra.Recognize <> n:39 var
+R4083:4092 LayoutAlgebra.Recognize <> first_diff def
+R4094:4094 LayoutAlgebra.Recognize <> g:40 var
+R4099:4101 Coq.Init.Peano <> ::nat_scope:x_'-'_x not
+R4098:4098 LayoutAlgebra.Recognize <> n:39 var
+R4121:4122 Coq.Lists.List ListNotations ::list_scope:'['_']' not
+prf 4165:4179 <> scan_from_sound
+binder 4192:4196 <> steps:41
+binder 4198:4198 <> n:42
+binder 4200:4200 <> h:43
+binder 4202:4202 <> t:44
+binder 4204:4208 <> wlast:45
+binder 4210:4212 <> acc:46
+binder 4214:4215 <> ws:47
+R4234:4237 Coq.Init.Logic <> ::type_scope:x_'->'_x not
+R4224:4227 Coq.Init.Peano <> ::nat_scope:x_'<='_x not
+R4228:4228 LayoutAlgebra.Recognize <> t:44 var
+R4254:4261 Coq.Init.Logic <> ::type_scope:x_'->'_x not
+R4240:4243 Coq.Init.Peano <> ::nat_scope:x_'<='_x not
+R4244:4248 LayoutAlgebra.Recognize <> wlast:45 var
+R4299:4306 Coq.Init.Logic <> ::type_scope:x_'->'_x not
+R4262:4267 Coq.Lists.List <> Forall ind
+R4296:4298 LayoutAlgebra.Recognize <> acc:46 var
+binder 4274:4274 <> p:48
+R4285:4287 Coq.Init.Peano <> ::nat_scope:x_'<'_x not
+R4280:4282 Coq.Init.Datatypes <> fst def
+R4284:4284 LayoutAlgebra.Recognize <> p:48 var
+R4288:4288 LayoutAlgebra.Recognize <> t:44 var
+R4348:4355 Coq.Init.Logic <> ::type_scope:x_'->'_x not
+R4338:4340 Coq.Init.Logic <> ::type_scope:x_'='_x not
+R4307:4315 LayoutAlgebra.Recognize <> scan_from def
+R4317:4317 LayoutAlgebra.Recognize <> n:42 var
+R4319:4319 LayoutAlgebra.Recognize <> h:43 var
+R4321:4325 LayoutAlgebra.Recognize <> steps:41 var
+R4327:4327 LayoutAlgebra.Recognize <> t:44 var
+R4329:4333 LayoutAlgebra.Recognize <> wlast:45 var
+R4335:4337 LayoutAlgebra.Recognize <> acc:46 var
+R4341:4344 Coq.Init.Datatypes <> Some constr
+R4346:4347 LayoutAlgebra.Recognize <> ws:47 var
+R4356:4362 Coq.Init.Logic <> ::type_scope:'exists'_x_'..'_x_','_x not
+R4368:4375 Coq.Init.Logic <> ::type_scope:'exists'_x_'..'_x_','_x not
+binder 4363:4367 <> extra:49
+R4393:4402 Coq.Init.Logic <> ::type_scope:x_'/\'_x not
+R4378:4380 Coq.Init.Logic <> ::type_scope:x_'='_x not
+R4376:4377 LayoutAlgebra.Recognize <> ws:47 var
+R4384:4387 Coq.Init.Datatypes <> ::list_scope:x_'++'_x not
+R4381:4383 LayoutAlgebra.Recognize <> acc:46 var
+R4388:4392 LayoutAlgebra.Recognize <> extra:49 var
+R4443:4452 Coq.Init.Logic <> ::type_scope:x_'/\'_x not
+R4403:4408 Coq.Lists.List <> Forall ind
+R4438:4442 LayoutAlgebra.Recognize <> extra:49 var
+binder 4415:4415 <> p:50
+R4422:4425 Coq.Init.Peano <> ::nat_scope:x_'<='_x not
+R4421:4421 LayoutAlgebra.Recognize <> t:44 var
+R4426:4428 Coq.Init.Datatypes <> fst def
+R4430:4430 LayoutAlgebra.Recognize <> p:50 var
+R4477:4487 Coq.Init.Logic <> ::type_scope:x_'/\'_x not
+R4557:4557 Coq.Init.Logic <> ::type_scope:x_'/\'_x not
+R4453:4460 LayoutAlgebra.Recognize <> chain_ok def
+R4462:4466 LayoutAlgebra.Recognize <> wlast:45 var
+R4468:4468 LayoutAlgebra.Recognize <> t:44 var
+R4470:4470 LayoutAlgebra.Recognize <> n:42 var
+R4472:4476 LayoutAlgebra.Recognize <> extra:49 var
+binder 4495:4496 <> t':51
+R4512:4515 Coq.Init.Logic <> ::type_scope:x_'->'_x not
+R4501:4504 Coq.Init.Peano <> ::nat_scope:x_'<='_x not
+R4500:4500 LayoutAlgebra.Recognize <> t:44 var
+R4505:4506 LayoutAlgebra.Recognize <> t':51 var
+R4536:4539 Coq.Init.Logic <> ::type_scope:x_'->'_x not
+R4519:4521 Coq.Init.Peano <> ::nat_scope:x_'<'_x not
+R4517:4518 LayoutAlgebra.Recognize <> t':51 var
+R4523:4525 Coq.Init.Peano <> ::nat_scope:x_'+'_x not
+R4522:4522 LayoutAlgebra.Recognize <> t:44 var
+R4526:4530 LayoutAlgebra.Recognize <> steps:41 var
+R4544:4546 Coq.Init.Logic <> ::type_scope:x_'='_x not
+R4540:4540 LayoutAlgebra.Recognize <> h:43 var
+R4542:4543 LayoutAlgebra.Recognize <> t':51 var
+R4547:4550 LayoutAlgebra.Chain <> dsum def
+R4552:4553 LayoutAlgebra.Recognize <> ws:47 var
+R4555:4556 LayoutAlgebra.Recognize <> t':51 var
+R4759:4760 Coq.Lists.List ListNotations ::list_scope:'['_']' not
+R4759:4760 Coq.Lists.List ListNotations ::list_scope:'['_']' not
+R4771:4779 Coq.Lists.List <> app_nil_r thm
+R4771:4779 Coq.Lists.List <> app_nil_r thm
+R4771:4779 Coq.Lists.List <> app_nil_r thm
+R4828:4837 Coq.Lists.List <> Forall_nil constr
+R4828:4837 Coq.Lists.List <> Forall_nil constr
+R4861:4861 Coq.Init.Logic <> I constr
+R4861:4861 Coq.Init.Logic <> I constr
+R4927:4936 Coq.ZArith.BinInt Z eqb_spec thm
+R4939:4943 LayoutAlgebra.Recognize <> resid def
+R4927:4936 Coq.ZArith.BinInt Z eqb_spec thm
+R4939:4943 LayoutAlgebra.Recognize <> resid def
+R5044:5049 Coq.Lists.List <> Forall ind
+binder 5056:5056 <> p:52
+R5067:5069 Coq.Init.Peano <> ::nat_scope:x_'<'_x not
+R5062:5064 Coq.Init.Datatypes <> fst def
+R5066:5066 LayoutAlgebra.Recognize <> p:52 var
+R5070:5070 Coq.Init.Datatypes <> S constr
+R5044:5049 Coq.Lists.List <> Forall ind
+binder 5056:5056 <> p:53
+R5067:5069 Coq.Init.Peano <> ::nat_scope:x_'<'_x not
+R5062:5064 Coq.Init.Datatypes <> fst def
+R5066:5066 LayoutAlgebra.Recognize <> p:53 var
+R5070:5070 Coq.Init.Datatypes <> S constr
+R5101:5111 Coq.Lists.List <> Forall_impl thm
+R5101:5111 Coq.Lists.List <> Forall_impl thm
+R5168:5168 Coq.Init.Datatypes <> S constr
+R5168:5168 Coq.Init.Datatypes <> S constr
+R5354:5364 Coq.Lists.List <> Forall_impl thm
+R5354:5364 Coq.Lists.List <> Forall_impl thm
+R5409:5424 LayoutAlgebra.Recognize <> chain_ok_lo_mono thm
+R5409:5424 LayoutAlgebra.Recognize <> chain_ok_lo_mono thm
+R5490:5499 Coq.Arith.PeanoNat Nat eq_dec thm
+R5490:5499 Coq.Arith.PeanoNat Nat eq_dec thm
+R5540:5544 LayoutAlgebra.Recognize <> resid def
+R5577:5584 LayoutAlgebra.Recognize <> dsum_app thm
+R5577:5584 LayoutAlgebra.Recognize <> dsum_app thm
+R5577:5584 LayoutAlgebra.Recognize <> dsum_app thm
+R5666:5676 Coq.Lists.List <> Forall_impl thm
+R5607:5616 LayoutAlgebra.Recognize <> dsum_above thm
+R5607:5616 LayoutAlgebra.Recognize <> dsum_above thm
+R5607:5616 LayoutAlgebra.Recognize <> dsum_above thm
+R5817:5820 Coq.Init.Datatypes <> andb def
+R5845:5851 Coq.Arith.PeanoNat Nat eqb def
+R5855:5859 Coq.Arith.PeanoNat <> ::nat_scope:x_'mod'_x not
+R5823:5829 Coq.Arith.PeanoNat Nat eqb def
+R5833:5837 Coq.Arith.PeanoNat <> ::nat_scope:x_'mod'_x not
+R5817:5820 Coq.Init.Datatypes <> andb def
+R5845:5851 Coq.Arith.PeanoNat Nat eqb def
+R5855:5859 Coq.Arith.PeanoNat <> ::nat_scope:x_'mod'_x not
+R5823:5829 Coq.Arith.PeanoNat Nat eqb def
+R5833:5837 Coq.Arith.PeanoNat <> ::nat_scope:x_'mod'_x not
+R5919:5927 Coq.Init.Datatypes <> andb_prop thm
+R5919:5927 Coq.Init.Datatypes <> andb_prop thm
+R5976:5985 Coq.Arith.PeanoNat Nat eqb_eq thm
+R5976:5985 Coq.Arith.PeanoNat Nat eqb_eq thm
+R6000:6009 Coq.Arith.PeanoNat Nat eqb_eq thm
+R6000:6009 Coq.Arith.PeanoNat Nat eqb_eq thm
+R6038:6047 Coq.Arith.PeanoNat Nat divide def
+R6064:6077 Coq.Arith.PeanoNat Nat mod_divide abbrev
+R6038:6047 Coq.Arith.PeanoNat Nat divide def
+R6064:6077 Coq.Arith.PeanoNat Nat mod_divide abbrev
+R6119:6128 Coq.Arith.PeanoNat Nat divide def
+R6149:6162 Coq.Arith.PeanoNat Nat mod_divide abbrev
+R6119:6128 Coq.Arith.PeanoNat Nat divide def
+R6149:6162 Coq.Arith.PeanoNat Nat mod_divide abbrev
+R6206:6211 Coq.Lists.List <> Forall ind
+R6246:6249 Coq.Init.Datatypes <> ::list_scope:x_'++'_x not
+R6250:6250 Coq.Lists.List ListNotations ::list_scope:'['_x_']' not
+R6269:6269 Coq.Lists.List ListNotations ::list_scope:'['_x_']' not
+R6251:6251 Coq.Init.Datatypes <> ::core_scope:'('_x_','_x_','_'..'_','_x_')' not
+R6253:6254 Coq.Init.Datatypes <> ::core_scope:'('_x_','_x_','_'..'_','_x_')' not
+R6268:6268 Coq.Init.Datatypes <> ::core_scope:'('_x_','_x_','_'..'_','_x_')' not
+R6255:6259 LayoutAlgebra.Recognize <> resid def
+binder 6218:6218 <> p:54
+R6229:6231 Coq.Init.Peano <> ::nat_scope:x_'<'_x not
+R6224:6226 Coq.Init.Datatypes <> fst def
+R6228:6228 LayoutAlgebra.Recognize <> p:54 var
+R6232:6232 Coq.Init.Datatypes <> S constr
+R6206:6211 Coq.Lists.List <> Forall ind
+R6246:6249 Coq.Init.Datatypes <> ::list_scope:x_'++'_x not
+R6250:6250 Coq.Lists.List ListNotations ::list_scope:'['_x_']' not
+R6269:6269 Coq.Lists.List ListNotations ::list_scope:'['_x_']' not
+R6251:6251 Coq.Init.Datatypes <> ::core_scope:'('_x_','_x_','_'..'_','_x_')' not
+R6253:6254 Coq.Init.Datatypes <> ::core_scope:'('_x_','_x_','_'..'_','_x_')' not
+R6268:6268 Coq.Init.Datatypes <> ::core_scope:'('_x_','_x_','_'..'_','_x_')' not
+R6255:6259 LayoutAlgebra.Recognize <> resid def
+binder 6218:6218 <> p:55
+R6229:6231 Coq.Init.Peano <> ::nat_scope:x_'<'_x not
+R6224:6226 Coq.Init.Datatypes <> fst def
+R6228:6228 LayoutAlgebra.Recognize <> p:55 var
+R6232:6232 Coq.Init.Datatypes <> S constr
+R6288:6297 Coq.Lists.List <> Forall_app thm
+R6288:6297 Coq.Lists.List <> Forall_app thm
+R6324:6334 Coq.Lists.List <> Forall_impl thm
+R6324:6334 Coq.Lists.List <> Forall_impl thm
+R6408:6417 Coq.Lists.List <> Forall_nil constr
+R6408:6417 Coq.Lists.List <> Forall_nil constr
+R6447:6447 Coq.Init.Datatypes <> S constr
+R6458:6461 Coq.Init.Datatypes <> ::list_scope:x_'++'_x not
+R6462:6462 Coq.Lists.List ListNotations ::list_scope:'['_x_']' not
+R6481:6481 Coq.Lists.List ListNotations ::list_scope:'['_x_']' not
+R6463:6463 Coq.Init.Datatypes <> ::core_scope:'('_x_','_x_','_'..'_','_x_')' not
+R6465:6466 Coq.Init.Datatypes <> ::core_scope:'('_x_','_x_','_'..'_','_x_')' not
+R6480:6480 Coq.Init.Datatypes <> ::core_scope:'('_x_','_x_','_'..'_','_x_')' not
+R6467:6471 LayoutAlgebra.Recognize <> resid def
+R6447:6447 Coq.Init.Datatypes <> S constr
+R6458:6461 Coq.Init.Datatypes <> ::list_scope:x_'++'_x not
+R6462:6462 Coq.Lists.List ListNotations ::list_scope:'['_x_']' not
+R6481:6481 Coq.Lists.List ListNotations ::list_scope:'['_x_']' not
+R6463:6463 Coq.Init.Datatypes <> ::core_scope:'('_x_','_x_','_'..'_','_x_')' not
+R6465:6466 Coq.Init.Datatypes <> ::core_scope:'('_x_','_x_','_'..'_','_x_')' not
+R6480:6480 Coq.Init.Datatypes <> ::core_scope:'('_x_','_x_','_'..'_','_x_')' not
+R6467:6471 LayoutAlgebra.Recognize <> resid def
+R6606:6609 Coq.Init.Datatypes <> ::list_scope:x_'::'_x not
+R6588:6588 Coq.Init.Datatypes <> ::core_scope:'('_x_','_x_','_'..'_','_x_')' not
+R6590:6591 Coq.Init.Datatypes <> ::core_scope:'('_x_','_x_','_'..'_','_x_')' not
+R6605:6605 Coq.Init.Datatypes <> ::core_scope:'('_x_','_x_','_'..'_','_x_')' not
+R6592:6596 LayoutAlgebra.Recognize <> resid def
+R6606:6609 Coq.Init.Datatypes <> ::list_scope:x_'::'_x not
+R6588:6588 Coq.Init.Datatypes <> ::core_scope:'('_x_','_x_','_'..'_','_x_')' not
+R6590:6591 Coq.Init.Datatypes <> ::core_scope:'('_x_','_x_','_'..'_','_x_')' not
+R6605:6605 Coq.Init.Datatypes <> ::core_scope:'('_x_','_x_','_'..'_','_x_')' not
+R6592:6596 LayoutAlgebra.Recognize <> resid def
+R6648:6656 Coq.Lists.List <> app_assoc thm
+R6648:6656 Coq.Lists.List <> app_assoc thm
+R6648:6656 Coq.Lists.List <> app_assoc thm
+R6745:6755 Coq.Lists.List <> Forall_impl thm
+R6745:6755 Coq.Lists.List <> Forall_impl thm
+R6883:6898 LayoutAlgebra.Recognize <> chain_ok_lo_mono thm
+R6883:6898 LayoutAlgebra.Recognize <> chain_ok_lo_mono thm
+R6964:6973 Coq.Arith.PeanoNat Nat eq_dec thm
+R6964:6973 Coq.Arith.PeanoNat Nat eq_dec thm
+R7087:7094 LayoutAlgebra.Recognize <> dsum_app thm
+R7097:7104 LayoutAlgebra.Recognize <> dsum_app thm
+R7087:7094 LayoutAlgebra.Recognize <> dsum_app thm
+R7087:7094 LayoutAlgebra.Recognize <> dsum_app thm
+R7097:7104 LayoutAlgebra.Recognize <> dsum_app thm
+R7097:7104 LayoutAlgebra.Recognize <> dsum_app thm
+R7186:7196 Coq.Lists.List <> Forall_impl thm
+R7127:7136 LayoutAlgebra.Recognize <> dsum_above thm
+R7127:7136 LayoutAlgebra.Recognize <> dsum_above thm
+R7127:7136 LayoutAlgebra.Recognize <> dsum_above thm
+R7254:7269 LayoutAlgebra.Recognize <> divides_ind_self thm
+R7254:7269 LayoutAlgebra.Recognize <> divides_ind_self thm
+R7254:7269 LayoutAlgebra.Recognize <> divides_ind_self thm
+R7304:7308 LayoutAlgebra.Recognize <> resid def
+prf 7525:7534 <> scan_sound
+R7541:7543 Coq.Init.Datatypes <> nat ind
+binder 7537:7537 <> n:56
+R7554:7557 Coq.Init.Logic <> ::type_scope:x_'->'_x not
+R7551:7553 Coq.Init.Datatypes <> nat ind
+R7558:7558 Coq.Numbers.BinNums <> Z ind
+binder 7547:7547 <> g:57
+R7567:7570 Coq.Init.Datatypes <> list ind
+R7576:7578 Coq.Init.Datatypes <> ::type_scope:x_'*'_x not
+R7573:7575 Coq.Init.Datatypes <> nat ind
+R7579:7579 Coq.Numbers.BinNums <> Z ind
+binder 7562:7563 <> ws:58
+R7599:7602 Coq.Init.Logic <> ::type_scope:x_'->'_x not
+R7589:7592 Coq.Init.Peano <> ::nat_scope:x_'<='_x not
+R7593:7593 LayoutAlgebra.Recognize <> n:56 var
+R7614:7617 Coq.Init.Logic <> ::type_scope:x_'->'_x not
+R7610:7612 Coq.Init.Logic <> ::type_scope:x_'='_x not
+R7603:7603 LayoutAlgebra.Recognize <> g:57 var
+R7636:7641 Coq.Init.Logic <> ::type_scope:x_'->'_x not
+R7626:7628 Coq.Init.Logic <> ::type_scope:x_'='_x not
+R7618:7621 LayoutAlgebra.Recognize <> scan def
+R7623:7623 LayoutAlgebra.Recognize <> n:56 var
+R7625:7625 LayoutAlgebra.Recognize <> g:57 var
+R7629:7632 Coq.Init.Datatypes <> Some constr
+R7634:7635 LayoutAlgebra.Recognize <> ws:58 var
+R7667:7670 Coq.Init.Logic <> ::type_scope:x_'/\'_x not
+R7642:7649 LayoutAlgebra.Recognize <> chain_ok def
+R7663:7663 LayoutAlgebra.Recognize <> n:56 var
+R7665:7666 LayoutAlgebra.Recognize <> ws:58 var
+R7671:7680 LayoutAlgebra.Chain <> Represents def
+R7682:7682 LayoutAlgebra.Recognize <> n:56 var
+R7684:7684 LayoutAlgebra.Recognize <> g:57 var
+R7686:7687 LayoutAlgebra.Recognize <> ws:58 var
+R7727:7730 LayoutAlgebra.Recognize <> scan def
+R7754:7768 LayoutAlgebra.Recognize <> scan_from_sound thm
+R7772:7774 Coq.Init.Peano <> ::nat_scope:x_'-'_x not
+R7785:7794 LayoutAlgebra.Recognize <> first_diff def
+R7811:7812 Coq.Lists.List ListNotations ::list_scope:'['_']' not
+R7754:7768 LayoutAlgebra.Recognize <> scan_from_sound thm
+R7772:7774 Coq.Init.Peano <> ::nat_scope:x_'-'_x not
+R7785:7794 LayoutAlgebra.Recognize <> first_diff def
+R7811:7812 Coq.Lists.List ListNotations ::list_scope:'['_']' not
+R7957:7970 LayoutAlgebra.Chain <> represents_iff thm
+R7998:8017 LayoutAlgebra.Recognize <> chain_ok_weights_pos thm
+R8040:8050 Coq.Arith.PeanoNat Nat le_refl thm
+R7957:7970 LayoutAlgebra.Chain <> represents_iff thm
+R7998:8017 LayoutAlgebra.Recognize <> chain_ok_weights_pos thm
+R8040:8050 Coq.Arith.PeanoNat Nat le_refl thm

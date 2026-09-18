@@ -4,3 +4,6 @@ _build/
 *.log
 *.out
 *.synctex.gz
+_opam/
+*.fdb_latexmk
+*.fls
