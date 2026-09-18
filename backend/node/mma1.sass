@@ -1,0 +1,33 @@
+# one warp, one m16n8k16 f16->f32 MMA. A 16x16 rm f16, Bt 8x16 rm f16, C 16x8 rm f32.
+# Transcribed from ptxas for the pipeline test; control words are ptxas's.
+.kernel mma1
+.sm sm_100a
+.regs 16
+.params 8 8 8
+  LDC R1, c[0x0][0x37c]                           {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  S2R R6, SR_TID.X                                {stall=1 yield=1 writebar=0 readbar=7 waitbar=0}
+  LDCU.128 UR8, c[0x0][0x380]                     {stall=1 yield=1 writebar=1 readbar=7 waitbar=0}
+  LDCU.64 UR4, c[0x0][0x358]                      {stall=1 yield=1 writebar=2 readbar=7 waitbar=0}
+  LDCU.64 UR6, c[0x0][0x390]                      {stall=1 yield=1 writebar=3 readbar=7 waitbar=0}
+  SHF.R.U32.HI R0, RZ, 0x2, R6                    {stall=2 yield=1 writebar=7 readbar=7 waitbar=1}
+  LOP3.LUT R6, R6, 0x3, RZ, 0xc0, !PT             {stall=3 yield=0 writebar=7 readbar=7 waitbar=0}
+  IMAD.SHL.U32 R7, R0, 0x20, RZ                   {stall=4 yield=0 writebar=7 readbar=7 waitbar=0}
+  IMAD R2, R6, 0x4, R7                            {stall=5 yield=0 writebar=7 readbar=7 waitbar=0}
+  IADD3 R4, P1, PT, R2, UR10, RZ                  {stall=2 yield=1 writebar=7 readbar=7 waitbar=2}
+  IADD3 R2, P0, PT, R2, UR8, RZ                   {stall=3 yield=0 writebar=7 readbar=7 waitbar=0}
+  IMAD.X R5, RZ, RZ, UR11, P1                     {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  IADD3.X R3, PT, PT, RZ, UR9, RZ, P0, !PT        {stall=4 yield=0 writebar=7 readbar=7 waitbar=0}
+  LDG.E R12, desc[UR4][R4.64]                     {stall=4 yield=1 writebar=2 readbar=7 waitbar=4}
+  LDG.E R13, desc[UR4][R4.64+0x10]                {stall=4 yield=1 writebar=2 readbar=7 waitbar=0}
+  LDG.E R8, desc[UR4][R2.64]                      {stall=4 yield=1 writebar=2 readbar=7 waitbar=0}
+  LDG.E R9, desc[UR4][R2.64+0x100]                {stall=4 yield=1 writebar=2 readbar=7 waitbar=0}
+  LDG.E R10, desc[UR4][R2.64+0x10]                {stall=4 yield=1 writebar=2 readbar=7 waitbar=0}
+  LDG.E R11, desc[UR4][R2.64+0x110]               {stall=1 yield=1 writebar=2 readbar=7 waitbar=0}
+  IMAD R6, R6, 0x8, R7                            {stall=5 yield=0 writebar=7 readbar=7 waitbar=0}
+  IADD3 R6, P0, PT, R6, UR6, RZ                   {stall=4 yield=0 writebar=7 readbar=7 waitbar=8}
+  IADD3.X R7, PT, PT, RZ, UR7, RZ, P0, !PT        {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  HMMA.16816.F32 R8, R8, R12, RZ                  {stall=15 yield=0 writebar=7 readbar=7 waitbar=4}
+  NOP                                             {stall=4 yield=0 writebar=7 readbar=7 waitbar=0}
+  STG.E.64 desc[UR4][R6.64], R8                   {stall=4 yield=1 writebar=7 readbar=7 waitbar=0}
+  STG.E.64 desc[UR4][R6.64+0x100], R10            {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  EXIT                                            {stall=5 yield=1 writebar=7 readbar=7 waitbar=0}

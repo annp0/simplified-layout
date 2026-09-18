@@ -1,0 +1,724 @@
+# kernel pgemm_4096_4096_4096_s4_t256 (c : f32[4096,4096], a : f16[4096,4096] via tma, bt : f16[4096,4096] via tma)
+#   tile 128x256, k tile 64, ring depth 4, 8 warps, cluster of 1
+#   smem sa : f16[128,64] x depth
+#   smem sb : f16[256,64] x depth
+#   tmem acc : f32[128,256] x 1 buffers
+#   pipe full[stage], 1 arrival
+#   pipe empty[stage], 1 arrival, free at start
+#   pipe ready[buffer], 1 arrival
+#   pipe free[buffer], 4 arrivals, free at start
+#   warps 0
+#     for each k tile (stage = k mod depth)
+#       wait empty
+#       sa[stage] <- tma a[tile_m rows, k tile]  -> full
+#       sb[stage] <- tma bt[tile_n rows, k tile]  -> full
+#   warps 1
+#     wait free
+#     for each k tile (stage = k mod depth)
+#       wait full
+#       acc += sa[stage] . sb[stage]^T
+#       commit empty
+#     commit ready
+#   warps 4,5,6,7
+#     wait ready
+#     c[tile, rows of warp] <- acc
+#     signal free
+.kernel pgemm_4096_4096_4096_s4_t256
+.sm sm_100a
+.regs 152
+.barriers 1
+.threads 256
+.smem 1024
+.dynsmem 231424
+.tile 128 256 64
+.grid 148 1
+.mbarriers 10
+.cluster 1
+.tcgen05
+.params 8 8 8
+  LDC R1, c[0x0][0x37c] {stall=1 yield=1 writebar=0 readbar=7 waitbar=0}
+  S2R R0, SR_TID.X {stall=1 yield=1 writebar=0 readbar=7 waitbar=0}
+  LDCU.64 UR4, c[0x0][0x358] {stall=1 yield=1 writebar=0 readbar=7 waitbar=0}
+  LDCU.64 UR8, c[0x0][0x380] {stall=1 yield=1 writebar=0 readbar=7 waitbar=0}
+  LDCU.64 UR10, c[0x0][0x388] {stall=1 yield=1 writebar=0 readbar=7 waitbar=0}
+  LDCU.64 UR12, c[0x0][0x390] {stall=1 yield=1 writebar=0 readbar=7 waitbar=0}
+  S2UR UR14, SR_CgaCtaId {stall=1 yield=1 writebar=0 readbar=7 waitbar=0}
+  UMOV UR15, 0x400 {stall=6 yield=0 writebar=7 readbar=7 waitbar=0}
+  ULEA UR16, UR14, UR15, 0x18 {stall=1 yield=1 writebar=7 readbar=7 waitbar=1}
+  S2R R14, SR_CTAID.X {stall=1 yield=1 writebar=1 readbar=7 waitbar=0}
+  SHF.R.U32.HI R2, RZ, 0x5, R0 {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  LOP3.LUT R3, R0, 0x1f, RZ, 0xc0, !PT {stall=6 yield=0 writebar=7 readbar=7 waitbar=0}
+  ISETP.EQ.U32.AND P2, PT, R3, RZ, PT {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  UMOV UR6, 0x10000 {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  UMOV UR7, 0x1 {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  UIADD3 UR26, UPT, UPT, UR16, 0x0, URZ {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  UIADD3 UR27, UPT, UPT, UR16, 0x8, URZ {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  UIADD3 UR28, UPT, UPT, UR16, 0x10, URZ {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  UIADD3 UR29, UPT, UPT, UR16, 0x18, URZ {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  UIADD3 UR30, UPT, UPT, UR16, 0x20, URZ {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  UIADD3 UR31, UPT, UPT, UR16, 0x28, URZ {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  UIADD3 UR32, UPT, UPT, UR16, 0x30, URZ {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  UIADD3 UR33, UPT, UPT, UR16, 0x38, URZ {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  UIADD3 UR52, UPT, UPT, UR16, 0x40, URZ {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  UIADD3 UR53, UPT, UPT, UR16, 0x48, URZ {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  ISETP.NE.U32.AND P1, PT, R2, 0x1, PT {stall=13 yield=0 writebar=7 readbar=7 waitbar=0}
+  @P1 BRA INIT_DONE {stall=13 yield=0 writebar=7 readbar=7 waitbar=0}
+  UMOV UR20, 0x1 {stall=6 yield=0 writebar=7 readbar=7 waitbar=0}
+  UIADD3 UR20, UPT, UPT, -UR20, 0x100000, URZ {stall=6 yield=0 writebar=7 readbar=7 waitbar=0}
+  USHF.L.U32 UR21, UR20, 0xb, URZ {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  USHF.L.U32 UR20, UR20, 0x1, URZ {stall=6 yield=0 writebar=7 readbar=7 waitbar=0}
+  SYNCS.EXCH.64 URZ, [UR26], UR20 {stall=2 yield=1 writebar=2 readbar=5 waitbar=0}
+  SYNCS.EXCH.64 URZ, [UR27], UR20 {stall=2 yield=1 writebar=2 readbar=5 waitbar=4}
+  SYNCS.EXCH.64 URZ, [UR28], UR20 {stall=2 yield=1 writebar=2 readbar=5 waitbar=4}
+  SYNCS.EXCH.64 URZ, [UR29], UR20 {stall=2 yield=1 writebar=2 readbar=5 waitbar=4}
+  UMOV UR20, 0x1 {stall=6 yield=0 writebar=7 readbar=7 waitbar=32}
+  UIADD3 UR20, UPT, UPT, -UR20, 0x100000, URZ {stall=6 yield=0 writebar=7 readbar=7 waitbar=0}
+  USHF.L.U32 UR21, UR20, 0xb, URZ {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  USHF.L.U32 UR20, UR20, 0x1, URZ {stall=6 yield=0 writebar=7 readbar=7 waitbar=0}
+  SYNCS.EXCH.64 URZ, [UR30], UR20 {stall=2 yield=1 writebar=0 readbar=3 waitbar=4}
+  SYNCS.EXCH.64 URZ, [UR31], UR20 {stall=2 yield=1 writebar=0 readbar=3 waitbar=1}
+  SYNCS.EXCH.64 URZ, [UR32], UR20 {stall=2 yield=1 writebar=0 readbar=3 waitbar=1}
+  SYNCS.EXCH.64 URZ, [UR33], UR20 {stall=2 yield=1 writebar=0 readbar=3 waitbar=1}
+  UMOV UR20, 0x1 {stall=6 yield=0 writebar=7 readbar=7 waitbar=8}
+  UIADD3 UR20, UPT, UPT, -UR20, 0x100000, URZ {stall=6 yield=0 writebar=7 readbar=7 waitbar=0}
+  USHF.L.U32 UR21, UR20, 0xb, URZ {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  USHF.L.U32 UR20, UR20, 0x1, URZ {stall=6 yield=0 writebar=7 readbar=7 waitbar=0}
+  SYNCS.EXCH.64 URZ, [UR52], UR20 {stall=2 yield=1 writebar=1 readbar=4 waitbar=1}
+  UMOV UR20, 0x4 {stall=6 yield=0 writebar=7 readbar=7 waitbar=16}
+  UIADD3 UR20, UPT, UPT, -UR20, 0x100000, URZ {stall=6 yield=0 writebar=7 readbar=7 waitbar=0}
+  USHF.L.U32 UR21, UR20, 0xb, URZ {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  USHF.L.U32 UR20, UR20, 0x1, URZ {stall=6 yield=0 writebar=7 readbar=7 waitbar=0}
+  SYNCS.EXCH.64 URZ, [UR53], UR20 {stall=2 yield=1 writebar=2 readbar=5 waitbar=2}
+ALLOC:
+  UMOV UR20, 0x8 {stall=1 yield=1 writebar=7 readbar=7 waitbar=40}
+  DEPBAR.LE SB0, 0x36 {stall=5 yield=0 writebar=7 readbar=7 waitbar=0}
+  UTCATOMSWS.FIND_AND_SET.ALIGN UP0, UR20, UR20 {stall=2 yield=1 writebar=0 readbar=3 waitbar=0}
+  PLOP3.LUT P0, PT, PT, PT, UP0, 0x80, 0x8 {stall=13 yield=0 writebar=7 readbar=7 waitbar=1}
+  @P0 BRA ALLOC_OK {stall=13 yield=0 writebar=7 readbar=7 waitbar=0}
+  NANOSLEEP 0x64 {stall=5 yield=0 writebar=7 readbar=7 waitbar=0}
+  BRA ALLOC {stall=13 yield=0 writebar=7 readbar=7 waitbar=0}
+ALLOC_OK:
+  USHF.L.U32 UR20, UR20, 0x5, URZ {stall=6 yield=0 writebar=7 readbar=7 waitbar=8}
+  IMAD.U32 R4, RZ, RZ, UR20 {stall=6 yield=0 writebar=7 readbar=7 waitbar=0}
+  STS [UR16+0x50], R4 {stall=1 yield=1 writebar=7 readbar=4 waitbar=0}
+  UVIRTCOUNT.DEALLOC.SMPOOL 0x80 {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+INIT_DONE:
+  MEMBAR.ALL.CTA {stall=2 yield=1 writebar=7 readbar=5 waitbar=20}
+  FENCE.VIEW.ASYNC.S {stall=2 yield=1 writebar=2 readbar=7 waitbar=32}
+  BAR.SYNC.DEFER_BLOCKING 0x0 {stall=6 yield=0 writebar=7 readbar=7 waitbar=4}
+  LDS R4, [UR16+0x50] {stall=2 yield=1 writebar=0 readbar=3 waitbar=0}
+  R2UR UR17, R4 {stall=1 yield=1 writebar=7 readbar=7 waitbar=1}
+  ISETP.LT.U32.AND P1, PT, R2, 0x1, PT {stall=13 yield=0 writebar=7 readbar=7 waitbar=0}
+  @!P1 BRA ROLE_END_1 {stall=13 yield=0 writebar=7 readbar=7 waitbar=0}
+  MOV R6, 0x80000000 {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+TILES_2:
+  IMAD R4, R14, 0x1, RZ {stall=6 yield=0 writebar=7 readbar=7 waitbar=0}
+  LOP3.LUT R13, R4, 0x7, RZ, 0xc0, !PT {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  SHF.R.U32.HI R9, RZ, 0x3, R4 {stall=6 yield=0 writebar=7 readbar=7 waitbar=32}
+  LOP3.LUT R12, R9, 0xf, RZ, 0xc0, !PT {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  SHF.R.U32.HI R9, RZ, 0x7, R4 {stall=6 yield=0 writebar=7 readbar=7 waitbar=0}
+  IMAD R13, R9, 0x8, R13 {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  R2UR UR18, R12 {stall=5 yield=0 writebar=7 readbar=7 waitbar=0}
+  R2UR UR19, R13 {stall=8 yield=0 writebar=7 readbar=7 waitbar=0}
+  USHF.L.U32 UR18, UR18, 0x8, URZ {stall=5 yield=0 writebar=7 readbar=7 waitbar=0}
+  USHF.L.U32 UR19, UR19, 0x7, URZ {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  UIADD3 UR24, UPT, UPT, UR17, 0x0, URZ {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  UMOV UR46, 0x0 {stall=4 yield=0 writebar=7 readbar=7 waitbar=0}
+  UIADD3 UR47, UPT, UPT, UR19, 0x0, URZ {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  UMOV UR50, 0x0 {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  UIADD3 UR51, UPT, UPT, UR18, 0x0, URZ {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  MOV R9, 0xc000 {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  MOV R8, RZ {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+KLOOP_4:
+WAIT_5:
+  SYNCS.PHASECHK.TRANS64.TRYWAIT P0, [UR30], R6 {stall=2 yield=1 writebar=1 readbar=7 waitbar=0}
+  @!P0 BRA WAIT_5 {stall=13 yield=0 writebar=7 readbar=7 waitbar=2}
+  @P2 SYNCS.ARRIVE.TRANS64 RZ, [UR26], R9 {stall=1 yield=1 writebar=7 readbar=5 waitbar=0}
+  UIADD3 UR44, UPT, UPT, UR16, 0x400, URZ {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  UIADD3 UR45, UPT, UPT, UR26, 0x0, URZ {stall=6 yield=0 writebar=7 readbar=7 waitbar=0}
+  UTMALDG.2D [UR44], [UR10] {stall=2 yield=1 writebar=7 readbar=3 waitbar=0}
+  UIADD3 UR46, UPT, UPT, UR46, 0x40, URZ {stall=1 yield=1 writebar=7 readbar=7 waitbar=8}
+  UIADD3 UR48, UPT, UPT, UR16, 0x4400, URZ {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  UIADD3 UR49, UPT, UPT, UR26, 0x0, URZ {stall=6 yield=0 writebar=7 readbar=7 waitbar=0}
+  UTMALDG.2D [UR48], [UR12] {stall=2 yield=1 writebar=7 readbar=4 waitbar=0}
+  UIADD3 UR50, UPT, UPT, UR50, 0x40, URZ {stall=1 yield=1 writebar=7 readbar=7 waitbar=16}
+WAIT_6:
+  SYNCS.PHASECHK.TRANS64.TRYWAIT P0, [UR31], R6 {stall=2 yield=1 writebar=2 readbar=7 waitbar=0}
+  @!P0 BRA WAIT_6 {stall=13 yield=0 writebar=7 readbar=7 waitbar=4}
+  @P2 SYNCS.ARRIVE.TRANS64 RZ, [UR27], R9 {stall=1 yield=1 writebar=7 readbar=3 waitbar=0}
+  UIADD3 UR44, UPT, UPT, UR16, 0xc400, URZ {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  UIADD3 UR45, UPT, UPT, UR27, 0x0, URZ {stall=6 yield=0 writebar=7 readbar=7 waitbar=0}
+  UTMALDG.2D [UR44], [UR10] {stall=2 yield=1 writebar=7 readbar=4 waitbar=0}
+  UIADD3 UR46, UPT, UPT, UR46, 0x40, URZ {stall=1 yield=1 writebar=7 readbar=7 waitbar=16}
+  UIADD3 UR48, UPT, UPT, UR16, 0x10400, URZ {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  UIADD3 UR49, UPT, UPT, UR27, 0x0, URZ {stall=6 yield=0 writebar=7 readbar=7 waitbar=0}
+  UTMALDG.2D [UR48], [UR12] {stall=2 yield=1 writebar=7 readbar=5 waitbar=0}
+  UIADD3 UR50, UPT, UPT, UR50, 0x40, URZ {stall=1 yield=1 writebar=7 readbar=7 waitbar=32}
+WAIT_7:
+  SYNCS.PHASECHK.TRANS64.TRYWAIT P0, [UR32], R6 {stall=2 yield=1 writebar=0 readbar=7 waitbar=0}
+  @!P0 BRA WAIT_7 {stall=13 yield=0 writebar=7 readbar=7 waitbar=1}
+  @P2 SYNCS.ARRIVE.TRANS64 RZ, [UR28], R9 {stall=1 yield=1 writebar=7 readbar=4 waitbar=0}
+  UIADD3 UR44, UPT, UPT, UR16, 0x18400, URZ {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  UIADD3 UR45, UPT, UPT, UR28, 0x0, URZ {stall=6 yield=0 writebar=7 readbar=7 waitbar=0}
+  UTMALDG.2D [UR44], [UR10] {stall=2 yield=1 writebar=7 readbar=5 waitbar=0}
+  UIADD3 UR46, UPT, UPT, UR46, 0x40, URZ {stall=1 yield=1 writebar=7 readbar=7 waitbar=32}
+  UIADD3 UR48, UPT, UPT, UR16, 0x1c400, URZ {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  UIADD3 UR49, UPT, UPT, UR28, 0x0, URZ {stall=6 yield=0 writebar=7 readbar=7 waitbar=0}
+  UTMALDG.2D [UR48], [UR12] {stall=2 yield=1 writebar=7 readbar=3 waitbar=0}
+  UIADD3 UR50, UPT, UPT, UR50, 0x40, URZ {stall=1 yield=1 writebar=7 readbar=7 waitbar=8}
+WAIT_8:
+  SYNCS.PHASECHK.TRANS64.TRYWAIT P0, [UR33], R6 {stall=2 yield=1 writebar=1 readbar=7 waitbar=0}
+  @!P0 BRA WAIT_8 {stall=13 yield=0 writebar=7 readbar=7 waitbar=2}
+  @P2 SYNCS.ARRIVE.TRANS64 RZ, [UR29], R9 {stall=1 yield=1 writebar=7 readbar=5 waitbar=0}
+  UIADD3 UR44, UPT, UPT, UR16, 0x24400, URZ {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  UIADD3 UR45, UPT, UPT, UR29, 0x0, URZ {stall=6 yield=0 writebar=7 readbar=7 waitbar=0}
+  UTMALDG.2D [UR44], [UR10] {stall=2 yield=1 writebar=7 readbar=3 waitbar=0}
+  UIADD3 UR46, UPT, UPT, UR46, 0x40, URZ {stall=1 yield=1 writebar=7 readbar=7 waitbar=8}
+  UIADD3 UR48, UPT, UPT, UR16, 0x28400, URZ {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  UIADD3 UR49, UPT, UPT, UR29, 0x0, URZ {stall=6 yield=0 writebar=7 readbar=7 waitbar=0}
+  UTMALDG.2D [UR48], [UR12] {stall=2 yield=1 writebar=7 readbar=4 waitbar=0}
+  UIADD3 UR50, UPT, UPT, UR50, 0x40, URZ {stall=1 yield=1 writebar=7 readbar=7 waitbar=16}
+  LOP3.LUT R6, R6, 0x80000000, RZ, 0x3c, !PT {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  VIADD R8, R8, 0x1 {stall=6 yield=0 writebar=7 readbar=7 waitbar=0}
+  ISETP.LT.U32.AND P3, PT, R8, 0x10, PT {stall=13 yield=0 writebar=7 readbar=7 waitbar=0}
+  @P3 BRA KLOOP_4 {stall=13 yield=0 writebar=7 readbar=7 waitbar=0}
+  IADD3 R14, PT, PT, R14, 0x94, RZ {stall=6 yield=0 writebar=7 readbar=7 waitbar=0}
+  ISETP.LT.U32.AND P1, PT, R14, 0x200, PT {stall=13 yield=0 writebar=7 readbar=7 waitbar=0}
+  @P1 BRA TILES_2 {stall=13 yield=0 writebar=7 readbar=7 waitbar=0}
+TILES_END_3:
+  EXIT {stall=5 yield=0 writebar=7 readbar=7 waitbar=32}
+ROLE_END_1:
+  ISETP.LT.U32.AND P1, PT, R2, 0x1, PT {stall=13 yield=0 writebar=7 readbar=7 waitbar=0}
+  @P1 BRA ROLE_END_9 {stall=13 yield=0 writebar=7 readbar=7 waitbar=0}
+  ISETP.LT.U32.AND P1, PT, R2, 0x2, PT {stall=13 yield=0 writebar=7 readbar=7 waitbar=0}
+  @!P1 BRA ROLE_END_9 {stall=13 yield=0 writebar=7 readbar=7 waitbar=0}
+  MOV R15, 0x80000000 {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  MOV R5, 0x0 {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+TILES_10:
+  IMAD R4, R14, 0x1, RZ {stall=6 yield=0 writebar=7 readbar=7 waitbar=0}
+  LOP3.LUT R13, R4, 0x7, RZ, 0xc0, !PT {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  SHF.R.U32.HI R9, RZ, 0x3, R4 {stall=6 yield=0 writebar=7 readbar=7 waitbar=0}
+  LOP3.LUT R12, R9, 0xf, RZ, 0xc0, !PT {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  SHF.R.U32.HI R9, RZ, 0x7, R4 {stall=6 yield=0 writebar=7 readbar=7 waitbar=0}
+  IMAD R13, R9, 0x8, R13 {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  R2UR UR18, R12 {stall=5 yield=0 writebar=7 readbar=7 waitbar=0}
+  R2UR UR19, R13 {stall=8 yield=0 writebar=7 readbar=7 waitbar=0}
+  USHF.L.U32 UR18, UR18, 0x8, URZ {stall=5 yield=0 writebar=7 readbar=7 waitbar=0}
+  USHF.L.U32 UR19, UR19, 0x7, URZ {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  UIADD3 UR24, UPT, UPT, UR17, 0x0, URZ {stall=1 yield=1 writebar=7 readbar=7 waitbar=16}
+WAIT_12:
+  SYNCS.PHASECHK.TRANS64.TRYWAIT P0, [UR53], R15 {stall=2 yield=1 writebar=2 readbar=7 waitbar=0}
+  @!P0 BRA WAIT_12 {stall=13 yield=0 writebar=7 readbar=7 waitbar=4}
+  UMOV UR22, 0x0 {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  UMOV UR40, 0x0 {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  UMOV UR41, 0x8400010 {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  UMOV UR37, 0x40004040 {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  UMOV UR39, 0x40004040 {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  UIADD3 UR44, UPT, UPT, UR16, 0x400, URZ {stall=6 yield=0 writebar=7 readbar=7 waitbar=0}
+  USHF.R.U32.HI UR44, URZ, 0x4, UR44 {stall=6 yield=0 writebar=7 readbar=7 waitbar=0}
+  ULOP3.LUT UR44, UR44, 0x3fff, URZ, 0xc0, !UPT {stall=6 yield=0 writebar=7 readbar=7 waitbar=0}
+  ULOP3.LUT UR44, UR44, 0x10000, URZ, 0xfc, !UPT {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  UIADD3 UR45, UPT, UPT, UR16, 0x4400, URZ {stall=6 yield=0 writebar=7 readbar=7 waitbar=0}
+  USHF.R.U32.HI UR45, URZ, 0x4, UR45 {stall=6 yield=0 writebar=7 readbar=7 waitbar=0}
+  ULOP3.LUT UR45, UR45, 0x3fff, URZ, 0xc0, !UPT {stall=6 yield=0 writebar=7 readbar=7 waitbar=0}
+  ULOP3.LUT UR45, UR45, 0x10000, URZ, 0xfc, !UPT {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  UIADD3 UR46, UPT, UPT, UR16, 0xc400, URZ {stall=6 yield=0 writebar=7 readbar=7 waitbar=0}
+  USHF.R.U32.HI UR46, URZ, 0x4, UR46 {stall=6 yield=0 writebar=7 readbar=7 waitbar=0}
+  ULOP3.LUT UR46, UR46, 0x3fff, URZ, 0xc0, !UPT {stall=6 yield=0 writebar=7 readbar=7 waitbar=0}
+  ULOP3.LUT UR46, UR46, 0x10000, URZ, 0xfc, !UPT {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  UIADD3 UR47, UPT, UPT, UR16, 0x10400, URZ {stall=6 yield=0 writebar=7 readbar=7 waitbar=0}
+  USHF.R.U32.HI UR47, URZ, 0x4, UR47 {stall=6 yield=0 writebar=7 readbar=7 waitbar=0}
+  ULOP3.LUT UR47, UR47, 0x3fff, URZ, 0xc0, !UPT {stall=6 yield=0 writebar=7 readbar=7 waitbar=0}
+  ULOP3.LUT UR47, UR47, 0x10000, URZ, 0xfc, !UPT {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  UIADD3 UR48, UPT, UPT, UR16, 0x18400, URZ {stall=6 yield=0 writebar=7 readbar=7 waitbar=0}
+  USHF.R.U32.HI UR48, URZ, 0x4, UR48 {stall=6 yield=0 writebar=7 readbar=7 waitbar=0}
+  ULOP3.LUT UR48, UR48, 0x3fff, URZ, 0xc0, !UPT {stall=6 yield=0 writebar=7 readbar=7 waitbar=0}
+  ULOP3.LUT UR48, UR48, 0x10000, URZ, 0xfc, !UPT {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  UIADD3 UR49, UPT, UPT, UR16, 0x1c400, URZ {stall=6 yield=0 writebar=7 readbar=7 waitbar=0}
+  USHF.R.U32.HI UR49, URZ, 0x4, UR49 {stall=6 yield=0 writebar=7 readbar=7 waitbar=0}
+  ULOP3.LUT UR49, UR49, 0x3fff, URZ, 0xc0, !UPT {stall=6 yield=0 writebar=7 readbar=7 waitbar=0}
+  ULOP3.LUT UR49, UR49, 0x10000, URZ, 0xfc, !UPT {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  UIADD3 UR50, UPT, UPT, UR16, 0x24400, URZ {stall=6 yield=0 writebar=7 readbar=7 waitbar=0}
+  USHF.R.U32.HI UR50, URZ, 0x4, UR50 {stall=6 yield=0 writebar=7 readbar=7 waitbar=0}
+  ULOP3.LUT UR50, UR50, 0x3fff, URZ, 0xc0, !UPT {stall=6 yield=0 writebar=7 readbar=7 waitbar=0}
+  ULOP3.LUT UR50, UR50, 0x10000, URZ, 0xfc, !UPT {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  UIADD3 UR51, UPT, UPT, UR16, 0x28400, URZ {stall=6 yield=0 writebar=7 readbar=7 waitbar=0}
+  USHF.R.U32.HI UR51, URZ, 0x4, UR51 {stall=6 yield=0 writebar=7 readbar=7 waitbar=0}
+  ULOP3.LUT UR51, UR51, 0x3fff, URZ, 0xc0, !UPT {stall=6 yield=0 writebar=7 readbar=7 waitbar=0}
+  ULOP3.LUT UR51, UR51, 0x10000, URZ, 0xfc, !UPT {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  MOV R8, RZ {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+KLOOP_13:
+WAIT_14:
+  SYNCS.PHASECHK.TRANS64.TRYWAIT P0, [UR26], R5 {stall=2 yield=1 writebar=0 readbar=7 waitbar=0}
+  @!P0 BRA WAIT_14 {stall=13 yield=0 writebar=7 readbar=7 waitbar=1}
+  UIADD3 UR36, UPT, UPT, UR44, 0x0, URZ {stall=1 yield=1 writebar=7 readbar=7 waitbar=16}
+  UIADD3 UR38, UPT, UPT, UR45, 0x0, URZ {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  UISETP.NE.U32.AND UP0, UPT, UR22, URZ, UPT {stall=13 yield=0 writebar=7 readbar=7 waitbar=0}
+  UTCHMMA gdesc[UR36], gdesc[UR38], tmem[UR24], tmem[UR40], idesc[UR41], UP0 {stall=12 yield=0 writebar=7 readbar=4 waitbar=0}
+  UMOV UR22, 0x1 {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  UIADD3 UR36, UPT, UPT, UR44, 0x2, URZ {stall=1 yield=1 writebar=7 readbar=7 waitbar=16}
+  UIADD3 UR38, UPT, UPT, UR45, 0x2, URZ {stall=9 yield=0 writebar=7 readbar=7 waitbar=0}
+  UTCHMMA gdesc[UR36], gdesc[UR38], tmem[UR24], tmem[UR40], idesc[UR41], UPT {stall=12 yield=0 writebar=7 readbar=5 waitbar=0}
+  UIADD3 UR36, UPT, UPT, UR44, 0x4, URZ {stall=1 yield=1 writebar=7 readbar=7 waitbar=32}
+  UIADD3 UR38, UPT, UPT, UR45, 0x4, URZ {stall=9 yield=0 writebar=7 readbar=7 waitbar=0}
+  UTCHMMA gdesc[UR36], gdesc[UR38], tmem[UR24], tmem[UR40], idesc[UR41], UPT {stall=12 yield=0 writebar=7 readbar=3 waitbar=0}
+  UIADD3 UR36, UPT, UPT, UR44, 0x6, URZ {stall=1 yield=1 writebar=7 readbar=7 waitbar=8}
+  UIADD3 UR38, UPT, UPT, UR45, 0x6, URZ {stall=9 yield=0 writebar=7 readbar=7 waitbar=0}
+  UTCHMMA gdesc[UR36], gdesc[UR38], tmem[UR24], tmem[UR40], idesc[UR41], UPT {stall=12 yield=0 writebar=7 readbar=4 waitbar=0}
+  UTCBAR [UR30], URZ {stall=12 yield=0 writebar=7 readbar=4 waitbar=0}
+WAIT_15:
+  SYNCS.PHASECHK.TRANS64.TRYWAIT P0, [UR27], R5 {stall=2 yield=1 writebar=2 readbar=7 waitbar=0}
+  @!P0 BRA WAIT_15 {stall=13 yield=0 writebar=7 readbar=7 waitbar=4}
+  UIADD3 UR36, UPT, UPT, UR46, 0x0, URZ {stall=1 yield=1 writebar=7 readbar=7 waitbar=16}
+  UIADD3 UR38, UPT, UPT, UR47, 0x0, URZ {stall=7 yield=0 writebar=7 readbar=7 waitbar=0}
+  UTCHMMA gdesc[UR36], gdesc[UR38], tmem[UR24], tmem[UR40], idesc[UR41], UPT {stall=12 yield=0 writebar=7 readbar=3 waitbar=0}
+  UIADD3 UR36, UPT, UPT, UR46, 0x2, URZ {stall=1 yield=1 writebar=7 readbar=7 waitbar=8}
+  UIADD3 UR38, UPT, UPT, UR47, 0x2, URZ {stall=9 yield=0 writebar=7 readbar=7 waitbar=0}
+  UTCHMMA gdesc[UR36], gdesc[UR38], tmem[UR24], tmem[UR40], idesc[UR41], UPT {stall=12 yield=0 writebar=7 readbar=4 waitbar=0}
+  UIADD3 UR36, UPT, UPT, UR46, 0x4, URZ {stall=1 yield=1 writebar=7 readbar=7 waitbar=16}
+  UIADD3 UR38, UPT, UPT, UR47, 0x4, URZ {stall=9 yield=0 writebar=7 readbar=7 waitbar=0}
+  UTCHMMA gdesc[UR36], gdesc[UR38], tmem[UR24], tmem[UR40], idesc[UR41], UPT {stall=12 yield=0 writebar=7 readbar=5 waitbar=0}
+  UIADD3 UR36, UPT, UPT, UR46, 0x6, URZ {stall=1 yield=1 writebar=7 readbar=7 waitbar=32}
+  UIADD3 UR38, UPT, UPT, UR47, 0x6, URZ {stall=9 yield=0 writebar=7 readbar=7 waitbar=0}
+  UTCHMMA gdesc[UR36], gdesc[UR38], tmem[UR24], tmem[UR40], idesc[UR41], UPT {stall=12 yield=0 writebar=7 readbar=3 waitbar=0}
+  UTCBAR [UR31], URZ {stall=12 yield=0 writebar=7 readbar=3 waitbar=0}
+WAIT_16:
+  SYNCS.PHASECHK.TRANS64.TRYWAIT P0, [UR28], R5 {stall=2 yield=1 writebar=1 readbar=7 waitbar=0}
+  @!P0 BRA WAIT_16 {stall=13 yield=0 writebar=7 readbar=7 waitbar=2}
+  UIADD3 UR36, UPT, UPT, UR48, 0x0, URZ {stall=1 yield=1 writebar=7 readbar=7 waitbar=8}
+  UIADD3 UR38, UPT, UPT, UR49, 0x0, URZ {stall=7 yield=0 writebar=7 readbar=7 waitbar=0}
+  UTCHMMA gdesc[UR36], gdesc[UR38], tmem[UR24], tmem[UR40], idesc[UR41], UPT {stall=12 yield=0 writebar=7 readbar=5 waitbar=0}
+  UIADD3 UR36, UPT, UPT, UR48, 0x2, URZ {stall=1 yield=1 writebar=7 readbar=7 waitbar=32}
+  UIADD3 UR38, UPT, UPT, UR49, 0x2, URZ {stall=9 yield=0 writebar=7 readbar=7 waitbar=0}
+  UTCHMMA gdesc[UR36], gdesc[UR38], tmem[UR24], tmem[UR40], idesc[UR41], UPT {stall=12 yield=0 writebar=7 readbar=3 waitbar=0}
+  UIADD3 UR36, UPT, UPT, UR48, 0x4, URZ {stall=1 yield=1 writebar=7 readbar=7 waitbar=8}
+  UIADD3 UR38, UPT, UPT, UR49, 0x4, URZ {stall=9 yield=0 writebar=7 readbar=7 waitbar=0}
+  UTCHMMA gdesc[UR36], gdesc[UR38], tmem[UR24], tmem[UR40], idesc[UR41], UPT {stall=12 yield=0 writebar=7 readbar=4 waitbar=0}
+  UIADD3 UR36, UPT, UPT, UR48, 0x6, URZ {stall=1 yield=1 writebar=7 readbar=7 waitbar=16}
+  UIADD3 UR38, UPT, UPT, UR49, 0x6, URZ {stall=9 yield=0 writebar=7 readbar=7 waitbar=0}
+  UTCHMMA gdesc[UR36], gdesc[UR38], tmem[UR24], tmem[UR40], idesc[UR41], UPT {stall=12 yield=0 writebar=7 readbar=5 waitbar=0}
+  UTCBAR [UR32], URZ {stall=12 yield=0 writebar=7 readbar=5 waitbar=0}
+WAIT_17:
+  SYNCS.PHASECHK.TRANS64.TRYWAIT P0, [UR29], R5 {stall=2 yield=1 writebar=0 readbar=7 waitbar=0}
+  @!P0 BRA WAIT_17 {stall=13 yield=0 writebar=7 readbar=7 waitbar=1}
+  UIADD3 UR36, UPT, UPT, UR50, 0x0, URZ {stall=1 yield=1 writebar=7 readbar=7 waitbar=32}
+  UIADD3 UR38, UPT, UPT, UR51, 0x0, URZ {stall=7 yield=0 writebar=7 readbar=7 waitbar=0}
+  UTCHMMA gdesc[UR36], gdesc[UR38], tmem[UR24], tmem[UR40], idesc[UR41], UPT {stall=12 yield=0 writebar=7 readbar=4 waitbar=0}
+  UIADD3 UR36, UPT, UPT, UR50, 0x2, URZ {stall=1 yield=1 writebar=7 readbar=7 waitbar=16}
+  UIADD3 UR38, UPT, UPT, UR51, 0x2, URZ {stall=9 yield=0 writebar=7 readbar=7 waitbar=0}
+  UTCHMMA gdesc[UR36], gdesc[UR38], tmem[UR24], tmem[UR40], idesc[UR41], UPT {stall=12 yield=0 writebar=7 readbar=5 waitbar=0}
+  UIADD3 UR36, UPT, UPT, UR50, 0x4, URZ {stall=1 yield=1 writebar=7 readbar=7 waitbar=32}
+  UIADD3 UR38, UPT, UPT, UR51, 0x4, URZ {stall=9 yield=0 writebar=7 readbar=7 waitbar=0}
+  UTCHMMA gdesc[UR36], gdesc[UR38], tmem[UR24], tmem[UR40], idesc[UR41], UPT {stall=12 yield=0 writebar=7 readbar=3 waitbar=0}
+  UIADD3 UR36, UPT, UPT, UR50, 0x6, URZ {stall=1 yield=1 writebar=7 readbar=7 waitbar=8}
+  UIADD3 UR38, UPT, UPT, UR51, 0x6, URZ {stall=9 yield=0 writebar=7 readbar=7 waitbar=0}
+  UTCHMMA gdesc[UR36], gdesc[UR38], tmem[UR24], tmem[UR40], idesc[UR41], UPT {stall=12 yield=0 writebar=7 readbar=4 waitbar=0}
+  UTCBAR [UR33], URZ {stall=12 yield=0 writebar=7 readbar=4 waitbar=0}
+  LOP3.LUT R5, R5, 0x80000000, RZ, 0x3c, !PT {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  VIADD R8, R8, 0x1 {stall=6 yield=0 writebar=7 readbar=7 waitbar=0}
+  ISETP.LT.U32.AND P3, PT, R8, 0x10, PT {stall=13 yield=0 writebar=7 readbar=7 waitbar=0}
+  @P3 BRA KLOOP_13 {stall=13 yield=0 writebar=7 readbar=7 waitbar=0}
+  UTCBAR [UR52], URZ {stall=12 yield=0 writebar=7 readbar=5 waitbar=0}
+  IADD3 R14, PT, PT, R14, 0x94, RZ {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  LOP3.LUT R15, R15, 0x80000000, RZ, 0x3c, !PT {stall=5 yield=0 writebar=7 readbar=7 waitbar=0}
+  ISETP.LT.U32.AND P1, PT, R14, 0x200, PT {stall=13 yield=0 writebar=7 readbar=7 waitbar=0}
+  @P1 BRA TILES_10 {stall=13 yield=0 writebar=7 readbar=7 waitbar=0}
+TILES_END_11:
+  ULOP3.LUT UR20, UR17, 0xffff, URZ, 0xc0, !UPT {stall=6 yield=0 writebar=7 readbar=7 waitbar=0}
+  USHF.R.U32.HI UR20, URZ, 0x5, UR20 {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  UMOV UR21, 0xff {stall=6 yield=0 writebar=7 readbar=7 waitbar=0}
+  USHF.L.U32 UR21, UR21, UR20, URZ {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  UIADD3 UR15, UPT, UPT, UR20, 0x10, URZ {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  UMOV UR40, 0x1 {stall=6 yield=0 writebar=7 readbar=7 waitbar=16}
+  USHF.L.U32 UR40, UR40, UR15, URZ {stall=6 yield=0 writebar=7 readbar=7 waitbar=0}
+  ULOP3.LUT UR21, UR21, UR40, URZ, 0xfc, !UPT {stall=6 yield=0 writebar=7 readbar=7 waitbar=0}
+  ULOP3.LUT UR21, URZ, UR21, URZ, 0x33, !UPT {stall=6 yield=0 writebar=7 readbar=7 waitbar=0}
+  UTCATOMSWS.AND URZ, UR21 {stall=2 yield=1 writebar=7 readbar=3 waitbar=0}
+  EXIT {stall=5 yield=0 writebar=7 readbar=7 waitbar=40}
+ROLE_END_9:
+  ISETP.LT.U32.AND P1, PT, R2, 0x4, PT {stall=13 yield=0 writebar=7 readbar=7 waitbar=0}
+  @P1 BRA ROLE_END_18 {stall=13 yield=0 writebar=7 readbar=7 waitbar=0}
+  ISETP.LT.U32.AND P1, PT, R2, 0x8, PT {stall=13 yield=0 writebar=7 readbar=7 waitbar=0}
+  @!P1 BRA ROLE_END_18 {stall=13 yield=0 writebar=7 readbar=7 waitbar=0}
+  MOV R7, 0x0 {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+TILES_19:
+  IMAD R4, R14, 0x1, RZ {stall=6 yield=0 writebar=7 readbar=7 waitbar=0}
+  LOP3.LUT R13, R4, 0x7, RZ, 0xc0, !PT {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  SHF.R.U32.HI R9, RZ, 0x3, R4 {stall=6 yield=0 writebar=7 readbar=7 waitbar=0}
+  LOP3.LUT R12, R9, 0xf, RZ, 0xc0, !PT {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  SHF.R.U32.HI R9, RZ, 0x7, R4 {stall=6 yield=0 writebar=7 readbar=7 waitbar=0}
+  IMAD R13, R9, 0x8, R13 {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  R2UR UR18, R12 {stall=5 yield=0 writebar=7 readbar=7 waitbar=0}
+  R2UR UR19, R13 {stall=8 yield=0 writebar=7 readbar=7 waitbar=0}
+  USHF.L.U32 UR18, UR18, 0x8, URZ {stall=5 yield=0 writebar=7 readbar=7 waitbar=0}
+  USHF.L.U32 UR19, UR19, 0x7, URZ {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  UIADD3 UR24, UPT, UPT, UR17, 0x0, URZ {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+WAIT_21:
+  SYNCS.PHASECHK.TRANS64.TRYWAIT P0, [UR52], R7 {stall=2 yield=1 writebar=1 readbar=7 waitbar=0}
+  @!P0 BRA WAIT_21 {stall=13 yield=0 writebar=7 readbar=7 waitbar=2}
+  LOP3.LUT R4, R2, 0x3, RZ, 0xc0, !PT {stall=6 yield=0 writebar=7 readbar=7 waitbar=0}
+  LEA R9, R4, UR24, 0x15 {stall=6 yield=0 writebar=7 readbar=7 waitbar=0}
+  R2UR UR25, R9 {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  IMAD R9, R13, 0x200000, RZ {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  LOP3.LUT R4, R2, 0x3, RZ, 0xc0, !PT {stall=6 yield=0 writebar=7 readbar=7 waitbar=0}
+  IMAD R9, R4, 0x80000, R9 {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  SHF.R.U32.HI R148, RZ, 0x4, R3 {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  LOP3.LUT R149, R3, 0xf, RZ, 0xc0, !PT {stall=5 yield=0 writebar=7 readbar=7 waitbar=0}
+  IMAD R9, R148, 0x4000, R9 {stall=6 yield=0 writebar=7 readbar=7 waitbar=0}
+  IMAD R9, R149, 0x10, R9 {stall=6 yield=0 writebar=7 readbar=7 waitbar=0}
+  IMAD R9, R12, 0x400, R9 {stall=6 yield=0 writebar=7 readbar=7 waitbar=0}
+  IADD3 R10, P0, PT, R9, UR8, RZ {stall=6 yield=0 writebar=7 readbar=7 waitbar=0}
+  IMAD.X R11, RZ, RZ, UR9, P0 {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  LOP3.LUT R4, R2, 0x3, RZ, 0xc0, !PT {stall=6 yield=0 writebar=7 readbar=7 waitbar=0}
+  R2UR UR23, R4 {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  IMAD R4, R4, 0x2200, RZ {stall=6 yield=0 writebar=7 readbar=7 waitbar=0}
+  IMAD R144, R3, 0x110, R4 {stall=6 yield=0 writebar=7 readbar=7 waitbar=0}
+  LEA R144, R144, UR16, 0x0 {stall=6 yield=0 writebar=7 readbar=7 waitbar=0}
+  IADD3 R144, PT, PT, R144, 0x30400, RZ {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  SHF.R.U32.HI R148, RZ, 0x4, R3 {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  LOP3.LUT R149, R3, 0xf, RZ, 0xc0, !PT {stall=5 yield=0 writebar=7 readbar=7 waitbar=0}
+  IMAD R145, R148, 0x110, R4 {stall=6 yield=0 writebar=7 readbar=7 waitbar=0}
+  IMAD R145, R149, 0x10, R145 {stall=6 yield=0 writebar=7 readbar=7 waitbar=0}
+  LEA R145, R145, UR16, 0x0 {stall=6 yield=0 writebar=7 readbar=7 waitbar=0}
+  IADD3 R145, PT, PT, R145, 0x30400, RZ {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  LDTM.x64 R16, tmem[UR25] {stall=2 yield=1 writebar=2 readbar=7 waitbar=8}
+  STS.128 [R144+0x0], R16 {stall=1 yield=1 writebar=7 readbar=5 waitbar=4}
+  STS.128 [R144+0x10], R20 {stall=1 yield=1 writebar=7 readbar=5 waitbar=0}
+  STS.128 [R144+0x20], R24 {stall=1 yield=1 writebar=7 readbar=5 waitbar=0}
+  STS.128 [R144+0x30], R28 {stall=1 yield=1 writebar=7 readbar=5 waitbar=0}
+  STS.128 [R144+0x40], R32 {stall=1 yield=1 writebar=7 readbar=5 waitbar=0}
+  STS.128 [R144+0x50], R36 {stall=1 yield=1 writebar=7 readbar=5 waitbar=0}
+  STS.128 [R144+0x60], R40 {stall=1 yield=1 writebar=7 readbar=5 waitbar=0}
+  STS.128 [R144+0x70], R44 {stall=1 yield=1 writebar=7 readbar=5 waitbar=0}
+  STS.128 [R144+0x80], R48 {stall=1 yield=1 writebar=7 readbar=5 waitbar=0}
+  STS.128 [R144+0x90], R52 {stall=1 yield=1 writebar=7 readbar=5 waitbar=0}
+  STS.128 [R144+0xa0], R56 {stall=1 yield=1 writebar=7 readbar=5 waitbar=0}
+  STS.128 [R144+0xb0], R60 {stall=1 yield=1 writebar=7 readbar=5 waitbar=0}
+  STS.128 [R144+0xc0], R64 {stall=1 yield=1 writebar=7 readbar=5 waitbar=0}
+  STS.128 [R144+0xd0], R68 {stall=1 yield=1 writebar=7 readbar=5 waitbar=0}
+  STS.128 [R144+0xe0], R72 {stall=1 yield=1 writebar=7 readbar=5 waitbar=0}
+  STS.128 [R144+0xf0], R76 {stall=1 yield=1 writebar=7 readbar=5 waitbar=0}
+  WARPSYNC.ALL {stall=5 yield=0 writebar=7 readbar=7 waitbar=0}
+  IMAD.MOV.U32 R146, RZ, RZ, R10 {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  IMAD.MOV.U32 R147, RZ, RZ, R11 {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  LDS.128 R80, [R145+0x0] {stall=5 yield=0 writebar=0 readbar=7 waitbar=0}
+  STG.E.128 desc[UR4][R146.64], R80 {stall=2 yield=1 writebar=7 readbar=3 waitbar=1}
+  IADD3 R146, P0, PT, R146, 0x8000, RZ {stall=6 yield=0 writebar=7 readbar=7 waitbar=8}
+  IMAD.X R147, RZ, RZ, R147, P0 {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  LDS.128 R80, [R145+0x220] {stall=5 yield=0 writebar=1 readbar=7 waitbar=0}
+  STG.E.128 desc[UR4][R146.64], R80 {stall=2 yield=1 writebar=7 readbar=4 waitbar=2}
+  IADD3 R146, P0, PT, R146, 0x8000, RZ {stall=6 yield=0 writebar=7 readbar=7 waitbar=16}
+  IMAD.X R147, RZ, RZ, R147, P0 {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  LDS.128 R80, [R145+0x440] {stall=5 yield=0 writebar=2 readbar=7 waitbar=0}
+  STG.E.128 desc[UR4][R146.64], R80 {stall=2 yield=1 writebar=7 readbar=5 waitbar=4}
+  IADD3 R146, P0, PT, R146, 0x8000, RZ {stall=6 yield=0 writebar=7 readbar=7 waitbar=32}
+  IMAD.X R147, RZ, RZ, R147, P0 {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  LDS.128 R80, [R145+0x660] {stall=5 yield=0 writebar=0 readbar=7 waitbar=0}
+  STG.E.128 desc[UR4][R146.64], R80 {stall=2 yield=1 writebar=7 readbar=3 waitbar=1}
+  IADD3 R146, P0, PT, R146, 0x8000, RZ {stall=6 yield=0 writebar=7 readbar=7 waitbar=8}
+  IMAD.X R147, RZ, RZ, R147, P0 {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  LDS.128 R80, [R145+0x880] {stall=5 yield=0 writebar=1 readbar=7 waitbar=0}
+  STG.E.128 desc[UR4][R146.64], R80 {stall=2 yield=1 writebar=7 readbar=4 waitbar=2}
+  IADD3 R146, P0, PT, R146, 0x8000, RZ {stall=6 yield=0 writebar=7 readbar=7 waitbar=16}
+  IMAD.X R147, RZ, RZ, R147, P0 {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  LDS.128 R80, [R145+0xaa0] {stall=5 yield=0 writebar=2 readbar=7 waitbar=0}
+  STG.E.128 desc[UR4][R146.64], R80 {stall=2 yield=1 writebar=7 readbar=5 waitbar=4}
+  IADD3 R146, P0, PT, R146, 0x8000, RZ {stall=6 yield=0 writebar=7 readbar=7 waitbar=32}
+  IMAD.X R147, RZ, RZ, R147, P0 {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  LDS.128 R80, [R145+0xcc0] {stall=5 yield=0 writebar=0 readbar=7 waitbar=0}
+  STG.E.128 desc[UR4][R146.64], R80 {stall=2 yield=1 writebar=7 readbar=3 waitbar=1}
+  IADD3 R146, P0, PT, R146, 0x8000, RZ {stall=6 yield=0 writebar=7 readbar=7 waitbar=8}
+  IMAD.X R147, RZ, RZ, R147, P0 {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  LDS.128 R80, [R145+0xee0] {stall=5 yield=0 writebar=1 readbar=7 waitbar=0}
+  STG.E.128 desc[UR4][R146.64], R80 {stall=2 yield=1 writebar=7 readbar=4 waitbar=2}
+  IADD3 R146, P0, PT, R146, 0x8000, RZ {stall=6 yield=0 writebar=7 readbar=7 waitbar=16}
+  IMAD.X R147, RZ, RZ, R147, P0 {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  LDS.128 R80, [R145+0x1100] {stall=5 yield=0 writebar=2 readbar=7 waitbar=0}
+  STG.E.128 desc[UR4][R146.64], R80 {stall=2 yield=1 writebar=7 readbar=5 waitbar=4}
+  IADD3 R146, P0, PT, R146, 0x8000, RZ {stall=6 yield=0 writebar=7 readbar=7 waitbar=32}
+  IMAD.X R147, RZ, RZ, R147, P0 {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  LDS.128 R80, [R145+0x1320] {stall=5 yield=0 writebar=0 readbar=7 waitbar=0}
+  STG.E.128 desc[UR4][R146.64], R80 {stall=2 yield=1 writebar=7 readbar=3 waitbar=1}
+  IADD3 R146, P0, PT, R146, 0x8000, RZ {stall=6 yield=0 writebar=7 readbar=7 waitbar=8}
+  IMAD.X R147, RZ, RZ, R147, P0 {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  LDS.128 R80, [R145+0x1540] {stall=5 yield=0 writebar=1 readbar=7 waitbar=0}
+  STG.E.128 desc[UR4][R146.64], R80 {stall=2 yield=1 writebar=7 readbar=4 waitbar=2}
+  IADD3 R146, P0, PT, R146, 0x8000, RZ {stall=6 yield=0 writebar=7 readbar=7 waitbar=16}
+  IMAD.X R147, RZ, RZ, R147, P0 {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  LDS.128 R80, [R145+0x1760] {stall=5 yield=0 writebar=2 readbar=7 waitbar=0}
+  STG.E.128 desc[UR4][R146.64], R80 {stall=2 yield=1 writebar=7 readbar=5 waitbar=4}
+  IADD3 R146, P0, PT, R146, 0x8000, RZ {stall=6 yield=0 writebar=7 readbar=7 waitbar=32}
+  IMAD.X R147, RZ, RZ, R147, P0 {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  LDS.128 R80, [R145+0x1980] {stall=5 yield=0 writebar=0 readbar=7 waitbar=0}
+  STG.E.128 desc[UR4][R146.64], R80 {stall=2 yield=1 writebar=7 readbar=3 waitbar=1}
+  IADD3 R146, P0, PT, R146, 0x8000, RZ {stall=6 yield=0 writebar=7 readbar=7 waitbar=8}
+  IMAD.X R147, RZ, RZ, R147, P0 {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  LDS.128 R80, [R145+0x1ba0] {stall=5 yield=0 writebar=1 readbar=7 waitbar=0}
+  STG.E.128 desc[UR4][R146.64], R80 {stall=2 yield=1 writebar=7 readbar=4 waitbar=2}
+  IADD3 R146, P0, PT, R146, 0x8000, RZ {stall=6 yield=0 writebar=7 readbar=7 waitbar=16}
+  IMAD.X R147, RZ, RZ, R147, P0 {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  LDS.128 R80, [R145+0x1dc0] {stall=5 yield=0 writebar=2 readbar=7 waitbar=0}
+  STG.E.128 desc[UR4][R146.64], R80 {stall=2 yield=1 writebar=7 readbar=5 waitbar=4}
+  IADD3 R146, P0, PT, R146, 0x8000, RZ {stall=6 yield=0 writebar=7 readbar=7 waitbar=32}
+  IMAD.X R147, RZ, RZ, R147, P0 {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  LDS.128 R80, [R145+0x1fe0] {stall=5 yield=0 writebar=0 readbar=7 waitbar=0}
+  STG.E.128 desc[UR4][R146.64], R80 {stall=1 yield=1 writebar=7 readbar=3 waitbar=1}
+  WARPSYNC.ALL {stall=5 yield=0 writebar=7 readbar=7 waitbar=0}
+  LDTM.x64 R80, tmem[UR25+0x40] {stall=2 yield=1 writebar=1 readbar=7 waitbar=8}
+  STS.128 [R144+0x0], R80 {stall=1 yield=1 writebar=7 readbar=4 waitbar=2}
+  STS.128 [R144+0x10], R84 {stall=1 yield=1 writebar=7 readbar=4 waitbar=0}
+  STS.128 [R144+0x20], R88 {stall=1 yield=1 writebar=7 readbar=4 waitbar=0}
+  STS.128 [R144+0x30], R92 {stall=1 yield=1 writebar=7 readbar=4 waitbar=0}
+  STS.128 [R144+0x40], R96 {stall=1 yield=1 writebar=7 readbar=4 waitbar=0}
+  STS.128 [R144+0x50], R100 {stall=1 yield=1 writebar=7 readbar=4 waitbar=0}
+  STS.128 [R144+0x60], R104 {stall=1 yield=1 writebar=7 readbar=4 waitbar=0}
+  STS.128 [R144+0x70], R108 {stall=1 yield=1 writebar=7 readbar=4 waitbar=0}
+  STS.128 [R144+0x80], R112 {stall=1 yield=1 writebar=7 readbar=4 waitbar=0}
+  STS.128 [R144+0x90], R116 {stall=1 yield=1 writebar=7 readbar=4 waitbar=0}
+  STS.128 [R144+0xa0], R120 {stall=1 yield=1 writebar=7 readbar=4 waitbar=0}
+  STS.128 [R144+0xb0], R124 {stall=1 yield=1 writebar=7 readbar=4 waitbar=0}
+  STS.128 [R144+0xc0], R128 {stall=1 yield=1 writebar=7 readbar=4 waitbar=0}
+  STS.128 [R144+0xd0], R132 {stall=1 yield=1 writebar=7 readbar=4 waitbar=0}
+  STS.128 [R144+0xe0], R136 {stall=1 yield=1 writebar=7 readbar=4 waitbar=0}
+  STS.128 [R144+0xf0], R140 {stall=1 yield=1 writebar=7 readbar=4 waitbar=0}
+  WARPSYNC.ALL {stall=5 yield=0 writebar=7 readbar=7 waitbar=0}
+  IMAD.MOV.U32 R146, RZ, RZ, R10 {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  IMAD.MOV.U32 R147, RZ, RZ, R11 {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  LDS.128 R16, [R145+0x0] {stall=5 yield=0 writebar=2 readbar=7 waitbar=0}
+  STG.E.128 desc[UR4][R146.64+0x100], R16 {stall=2 yield=1 writebar=7 readbar=5 waitbar=4}
+  IADD3 R146, P0, PT, R146, 0x8000, RZ {stall=6 yield=0 writebar=7 readbar=7 waitbar=32}
+  IMAD.X R147, RZ, RZ, R147, P0 {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  LDS.128 R16, [R145+0x220] {stall=5 yield=0 writebar=0 readbar=7 waitbar=0}
+  STG.E.128 desc[UR4][R146.64+0x100], R16 {stall=2 yield=1 writebar=7 readbar=3 waitbar=1}
+  IADD3 R146, P0, PT, R146, 0x8000, RZ {stall=6 yield=0 writebar=7 readbar=7 waitbar=8}
+  IMAD.X R147, RZ, RZ, R147, P0 {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  LDS.128 R16, [R145+0x440] {stall=5 yield=0 writebar=1 readbar=7 waitbar=0}
+  STG.E.128 desc[UR4][R146.64+0x100], R16 {stall=2 yield=1 writebar=7 readbar=4 waitbar=2}
+  IADD3 R146, P0, PT, R146, 0x8000, RZ {stall=6 yield=0 writebar=7 readbar=7 waitbar=16}
+  IMAD.X R147, RZ, RZ, R147, P0 {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  LDS.128 R16, [R145+0x660] {stall=5 yield=0 writebar=2 readbar=7 waitbar=0}
+  STG.E.128 desc[UR4][R146.64+0x100], R16 {stall=2 yield=1 writebar=7 readbar=5 waitbar=4}
+  IADD3 R146, P0, PT, R146, 0x8000, RZ {stall=6 yield=0 writebar=7 readbar=7 waitbar=32}
+  IMAD.X R147, RZ, RZ, R147, P0 {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  LDS.128 R16, [R145+0x880] {stall=5 yield=0 writebar=0 readbar=7 waitbar=0}
+  STG.E.128 desc[UR4][R146.64+0x100], R16 {stall=2 yield=1 writebar=7 readbar=3 waitbar=1}
+  IADD3 R146, P0, PT, R146, 0x8000, RZ {stall=6 yield=0 writebar=7 readbar=7 waitbar=8}
+  IMAD.X R147, RZ, RZ, R147, P0 {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  LDS.128 R16, [R145+0xaa0] {stall=5 yield=0 writebar=1 readbar=7 waitbar=0}
+  STG.E.128 desc[UR4][R146.64+0x100], R16 {stall=2 yield=1 writebar=7 readbar=4 waitbar=2}
+  IADD3 R146, P0, PT, R146, 0x8000, RZ {stall=6 yield=0 writebar=7 readbar=7 waitbar=16}
+  IMAD.X R147, RZ, RZ, R147, P0 {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  LDS.128 R16, [R145+0xcc0] {stall=5 yield=0 writebar=2 readbar=7 waitbar=0}
+  STG.E.128 desc[UR4][R146.64+0x100], R16 {stall=2 yield=1 writebar=7 readbar=5 waitbar=4}
+  IADD3 R146, P0, PT, R146, 0x8000, RZ {stall=6 yield=0 writebar=7 readbar=7 waitbar=32}
+  IMAD.X R147, RZ, RZ, R147, P0 {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  LDS.128 R16, [R145+0xee0] {stall=5 yield=0 writebar=0 readbar=7 waitbar=0}
+  STG.E.128 desc[UR4][R146.64+0x100], R16 {stall=2 yield=1 writebar=7 readbar=3 waitbar=1}
+  IADD3 R146, P0, PT, R146, 0x8000, RZ {stall=6 yield=0 writebar=7 readbar=7 waitbar=8}
+  IMAD.X R147, RZ, RZ, R147, P0 {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  LDS.128 R16, [R145+0x1100] {stall=5 yield=0 writebar=1 readbar=7 waitbar=0}
+  STG.E.128 desc[UR4][R146.64+0x100], R16 {stall=2 yield=1 writebar=7 readbar=4 waitbar=2}
+  IADD3 R146, P0, PT, R146, 0x8000, RZ {stall=6 yield=0 writebar=7 readbar=7 waitbar=16}
+  IMAD.X R147, RZ, RZ, R147, P0 {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  LDS.128 R16, [R145+0x1320] {stall=5 yield=0 writebar=2 readbar=7 waitbar=0}
+  STG.E.128 desc[UR4][R146.64+0x100], R16 {stall=2 yield=1 writebar=7 readbar=5 waitbar=4}
+  IADD3 R146, P0, PT, R146, 0x8000, RZ {stall=6 yield=0 writebar=7 readbar=7 waitbar=32}
+  IMAD.X R147, RZ, RZ, R147, P0 {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  LDS.128 R16, [R145+0x1540] {stall=5 yield=0 writebar=0 readbar=7 waitbar=0}
+  STG.E.128 desc[UR4][R146.64+0x100], R16 {stall=2 yield=1 writebar=7 readbar=3 waitbar=1}
+  IADD3 R146, P0, PT, R146, 0x8000, RZ {stall=6 yield=0 writebar=7 readbar=7 waitbar=8}
+  IMAD.X R147, RZ, RZ, R147, P0 {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  LDS.128 R16, [R145+0x1760] {stall=5 yield=0 writebar=1 readbar=7 waitbar=0}
+  STG.E.128 desc[UR4][R146.64+0x100], R16 {stall=2 yield=1 writebar=7 readbar=4 waitbar=2}
+  IADD3 R146, P0, PT, R146, 0x8000, RZ {stall=6 yield=0 writebar=7 readbar=7 waitbar=16}
+  IMAD.X R147, RZ, RZ, R147, P0 {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  LDS.128 R16, [R145+0x1980] {stall=5 yield=0 writebar=2 readbar=7 waitbar=0}
+  STG.E.128 desc[UR4][R146.64+0x100], R16 {stall=2 yield=1 writebar=7 readbar=5 waitbar=4}
+  IADD3 R146, P0, PT, R146, 0x8000, RZ {stall=6 yield=0 writebar=7 readbar=7 waitbar=32}
+  IMAD.X R147, RZ, RZ, R147, P0 {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  LDS.128 R16, [R145+0x1ba0] {stall=5 yield=0 writebar=0 readbar=7 waitbar=0}
+  STG.E.128 desc[UR4][R146.64+0x100], R16 {stall=2 yield=1 writebar=7 readbar=3 waitbar=1}
+  IADD3 R146, P0, PT, R146, 0x8000, RZ {stall=6 yield=0 writebar=7 readbar=7 waitbar=8}
+  IMAD.X R147, RZ, RZ, R147, P0 {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  LDS.128 R16, [R145+0x1dc0] {stall=5 yield=0 writebar=1 readbar=7 waitbar=0}
+  STG.E.128 desc[UR4][R146.64+0x100], R16 {stall=2 yield=1 writebar=7 readbar=4 waitbar=2}
+  IADD3 R146, P0, PT, R146, 0x8000, RZ {stall=6 yield=0 writebar=7 readbar=7 waitbar=16}
+  IMAD.X R147, RZ, RZ, R147, P0 {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  LDS.128 R16, [R145+0x1fe0] {stall=5 yield=0 writebar=2 readbar=7 waitbar=0}
+  STG.E.128 desc[UR4][R146.64+0x100], R16 {stall=1 yield=1 writebar=7 readbar=5 waitbar=4}
+  WARPSYNC.ALL {stall=5 yield=0 writebar=7 readbar=7 waitbar=0}
+  LDTM.x64 R16, tmem[UR25+0x80] {stall=2 yield=1 writebar=0 readbar=7 waitbar=32}
+  STS.128 [R144+0x0], R16 {stall=1 yield=1 writebar=7 readbar=3 waitbar=1}
+  STS.128 [R144+0x10], R20 {stall=1 yield=1 writebar=7 readbar=3 waitbar=0}
+  STS.128 [R144+0x20], R24 {stall=1 yield=1 writebar=7 readbar=3 waitbar=0}
+  STS.128 [R144+0x30], R28 {stall=1 yield=1 writebar=7 readbar=3 waitbar=0}
+  STS.128 [R144+0x40], R32 {stall=1 yield=1 writebar=7 readbar=3 waitbar=0}
+  STS.128 [R144+0x50], R36 {stall=1 yield=1 writebar=7 readbar=3 waitbar=0}
+  STS.128 [R144+0x60], R40 {stall=1 yield=1 writebar=7 readbar=3 waitbar=0}
+  STS.128 [R144+0x70], R44 {stall=1 yield=1 writebar=7 readbar=3 waitbar=0}
+  STS.128 [R144+0x80], R48 {stall=1 yield=1 writebar=7 readbar=3 waitbar=0}
+  STS.128 [R144+0x90], R52 {stall=1 yield=1 writebar=7 readbar=3 waitbar=0}
+  STS.128 [R144+0xa0], R56 {stall=1 yield=1 writebar=7 readbar=3 waitbar=0}
+  STS.128 [R144+0xb0], R60 {stall=1 yield=1 writebar=7 readbar=3 waitbar=0}
+  STS.128 [R144+0xc0], R64 {stall=1 yield=1 writebar=7 readbar=3 waitbar=0}
+  STS.128 [R144+0xd0], R68 {stall=1 yield=1 writebar=7 readbar=3 waitbar=0}
+  STS.128 [R144+0xe0], R72 {stall=1 yield=1 writebar=7 readbar=3 waitbar=0}
+  STS.128 [R144+0xf0], R76 {stall=1 yield=1 writebar=7 readbar=3 waitbar=0}
+  WARPSYNC.ALL {stall=5 yield=0 writebar=7 readbar=7 waitbar=0}
+  IMAD.MOV.U32 R146, RZ, RZ, R10 {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  IMAD.MOV.U32 R147, RZ, RZ, R11 {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  LDS.128 R80, [R145+0x0] {stall=5 yield=0 writebar=1 readbar=7 waitbar=0}
+  STG.E.128 desc[UR4][R146.64+0x200], R80 {stall=2 yield=1 writebar=7 readbar=4 waitbar=2}
+  IADD3 R146, P0, PT, R146, 0x8000, RZ {stall=6 yield=0 writebar=7 readbar=7 waitbar=16}
+  IMAD.X R147, RZ, RZ, R147, P0 {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  LDS.128 R80, [R145+0x220] {stall=5 yield=0 writebar=2 readbar=7 waitbar=0}
+  STG.E.128 desc[UR4][R146.64+0x200], R80 {stall=2 yield=1 writebar=7 readbar=5 waitbar=4}
+  IADD3 R146, P0, PT, R146, 0x8000, RZ {stall=6 yield=0 writebar=7 readbar=7 waitbar=32}
+  IMAD.X R147, RZ, RZ, R147, P0 {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  LDS.128 R80, [R145+0x440] {stall=5 yield=0 writebar=0 readbar=7 waitbar=0}
+  STG.E.128 desc[UR4][R146.64+0x200], R80 {stall=2 yield=1 writebar=7 readbar=3 waitbar=1}
+  IADD3 R146, P0, PT, R146, 0x8000, RZ {stall=6 yield=0 writebar=7 readbar=7 waitbar=8}
+  IMAD.X R147, RZ, RZ, R147, P0 {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  LDS.128 R80, [R145+0x660] {stall=5 yield=0 writebar=1 readbar=7 waitbar=0}
+  STG.E.128 desc[UR4][R146.64+0x200], R80 {stall=2 yield=1 writebar=7 readbar=4 waitbar=2}
+  IADD3 R146, P0, PT, R146, 0x8000, RZ {stall=6 yield=0 writebar=7 readbar=7 waitbar=16}
+  IMAD.X R147, RZ, RZ, R147, P0 {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  LDS.128 R80, [R145+0x880] {stall=5 yield=0 writebar=2 readbar=7 waitbar=0}
+  STG.E.128 desc[UR4][R146.64+0x200], R80 {stall=2 yield=1 writebar=7 readbar=5 waitbar=4}
+  IADD3 R146, P0, PT, R146, 0x8000, RZ {stall=6 yield=0 writebar=7 readbar=7 waitbar=32}
+  IMAD.X R147, RZ, RZ, R147, P0 {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  LDS.128 R80, [R145+0xaa0] {stall=5 yield=0 writebar=0 readbar=7 waitbar=0}
+  STG.E.128 desc[UR4][R146.64+0x200], R80 {stall=2 yield=1 writebar=7 readbar=3 waitbar=1}
+  IADD3 R146, P0, PT, R146, 0x8000, RZ {stall=6 yield=0 writebar=7 readbar=7 waitbar=8}
+  IMAD.X R147, RZ, RZ, R147, P0 {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  LDS.128 R80, [R145+0xcc0] {stall=5 yield=0 writebar=1 readbar=7 waitbar=0}
+  STG.E.128 desc[UR4][R146.64+0x200], R80 {stall=2 yield=1 writebar=7 readbar=4 waitbar=2}
+  IADD3 R146, P0, PT, R146, 0x8000, RZ {stall=6 yield=0 writebar=7 readbar=7 waitbar=16}
+  IMAD.X R147, RZ, RZ, R147, P0 {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  LDS.128 R80, [R145+0xee0] {stall=5 yield=0 writebar=2 readbar=7 waitbar=0}
+  STG.E.128 desc[UR4][R146.64+0x200], R80 {stall=2 yield=1 writebar=7 readbar=5 waitbar=4}
+  IADD3 R146, P0, PT, R146, 0x8000, RZ {stall=6 yield=0 writebar=7 readbar=7 waitbar=32}
+  IMAD.X R147, RZ, RZ, R147, P0 {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  LDS.128 R80, [R145+0x1100] {stall=5 yield=0 writebar=0 readbar=7 waitbar=0}
+  STG.E.128 desc[UR4][R146.64+0x200], R80 {stall=2 yield=1 writebar=7 readbar=3 waitbar=1}
+  IADD3 R146, P0, PT, R146, 0x8000, RZ {stall=6 yield=0 writebar=7 readbar=7 waitbar=8}
+  IMAD.X R147, RZ, RZ, R147, P0 {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  LDS.128 R80, [R145+0x1320] {stall=5 yield=0 writebar=1 readbar=7 waitbar=0}
+  STG.E.128 desc[UR4][R146.64+0x200], R80 {stall=2 yield=1 writebar=7 readbar=4 waitbar=2}
+  IADD3 R146, P0, PT, R146, 0x8000, RZ {stall=6 yield=0 writebar=7 readbar=7 waitbar=16}
+  IMAD.X R147, RZ, RZ, R147, P0 {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  LDS.128 R80, [R145+0x1540] {stall=5 yield=0 writebar=2 readbar=7 waitbar=0}
+  STG.E.128 desc[UR4][R146.64+0x200], R80 {stall=2 yield=1 writebar=7 readbar=5 waitbar=4}
+  IADD3 R146, P0, PT, R146, 0x8000, RZ {stall=6 yield=0 writebar=7 readbar=7 waitbar=32}
+  IMAD.X R147, RZ, RZ, R147, P0 {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  LDS.128 R80, [R145+0x1760] {stall=5 yield=0 writebar=0 readbar=7 waitbar=0}
+  STG.E.128 desc[UR4][R146.64+0x200], R80 {stall=2 yield=1 writebar=7 readbar=3 waitbar=1}
+  IADD3 R146, P0, PT, R146, 0x8000, RZ {stall=6 yield=0 writebar=7 readbar=7 waitbar=8}
+  IMAD.X R147, RZ, RZ, R147, P0 {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  LDS.128 R80, [R145+0x1980] {stall=5 yield=0 writebar=1 readbar=7 waitbar=0}
+  STG.E.128 desc[UR4][R146.64+0x200], R80 {stall=2 yield=1 writebar=7 readbar=4 waitbar=2}
+  IADD3 R146, P0, PT, R146, 0x8000, RZ {stall=6 yield=0 writebar=7 readbar=7 waitbar=16}
+  IMAD.X R147, RZ, RZ, R147, P0 {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  LDS.128 R80, [R145+0x1ba0] {stall=5 yield=0 writebar=2 readbar=7 waitbar=0}
+  STG.E.128 desc[UR4][R146.64+0x200], R80 {stall=2 yield=1 writebar=7 readbar=5 waitbar=4}
+  IADD3 R146, P0, PT, R146, 0x8000, RZ {stall=6 yield=0 writebar=7 readbar=7 waitbar=32}
+  IMAD.X R147, RZ, RZ, R147, P0 {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  LDS.128 R80, [R145+0x1dc0] {stall=5 yield=0 writebar=0 readbar=7 waitbar=0}
+  STG.E.128 desc[UR4][R146.64+0x200], R80 {stall=2 yield=1 writebar=7 readbar=3 waitbar=1}
+  IADD3 R146, P0, PT, R146, 0x8000, RZ {stall=6 yield=0 writebar=7 readbar=7 waitbar=8}
+  IMAD.X R147, RZ, RZ, R147, P0 {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  LDS.128 R80, [R145+0x1fe0] {stall=5 yield=0 writebar=1 readbar=7 waitbar=0}
+  STG.E.128 desc[UR4][R146.64+0x200], R80 {stall=1 yield=1 writebar=7 readbar=4 waitbar=2}
+  WARPSYNC.ALL {stall=5 yield=0 writebar=7 readbar=7 waitbar=0}
+  LDTM.x64 R80, tmem[UR25+0xc0] {stall=2 yield=1 writebar=2 readbar=7 waitbar=16}
+  STS.128 [R144+0x0], R80 {stall=1 yield=1 writebar=7 readbar=5 waitbar=4}
+  STS.128 [R144+0x10], R84 {stall=1 yield=1 writebar=7 readbar=5 waitbar=0}
+  STS.128 [R144+0x20], R88 {stall=1 yield=1 writebar=7 readbar=5 waitbar=0}
+  STS.128 [R144+0x30], R92 {stall=1 yield=1 writebar=7 readbar=5 waitbar=0}
+  STS.128 [R144+0x40], R96 {stall=1 yield=1 writebar=7 readbar=5 waitbar=0}
+  STS.128 [R144+0x50], R100 {stall=1 yield=1 writebar=7 readbar=5 waitbar=0}
+  STS.128 [R144+0x60], R104 {stall=1 yield=1 writebar=7 readbar=5 waitbar=0}
+  STS.128 [R144+0x70], R108 {stall=1 yield=1 writebar=7 readbar=5 waitbar=0}
+  STS.128 [R144+0x80], R112 {stall=1 yield=1 writebar=7 readbar=5 waitbar=0}
+  STS.128 [R144+0x90], R116 {stall=1 yield=1 writebar=7 readbar=5 waitbar=0}
+  STS.128 [R144+0xa0], R120 {stall=1 yield=1 writebar=7 readbar=5 waitbar=0}
+  STS.128 [R144+0xb0], R124 {stall=1 yield=1 writebar=7 readbar=5 waitbar=0}
+  STS.128 [R144+0xc0], R128 {stall=1 yield=1 writebar=7 readbar=5 waitbar=0}
+  STS.128 [R144+0xd0], R132 {stall=1 yield=1 writebar=7 readbar=5 waitbar=0}
+  STS.128 [R144+0xe0], R136 {stall=1 yield=1 writebar=7 readbar=5 waitbar=0}
+  STS.128 [R144+0xf0], R140 {stall=1 yield=1 writebar=7 readbar=5 waitbar=0}
+  WARPSYNC.ALL {stall=5 yield=0 writebar=7 readbar=7 waitbar=0}
+  IMAD.MOV.U32 R146, RZ, RZ, R10 {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  IMAD.MOV.U32 R147, RZ, RZ, R11 {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  LDS.128 R16, [R145+0x0] {stall=5 yield=0 writebar=0 readbar=7 waitbar=0}
+  STG.E.128 desc[UR4][R146.64+0x300], R16 {stall=2 yield=1 writebar=7 readbar=3 waitbar=1}
+  IADD3 R146, P0, PT, R146, 0x8000, RZ {stall=6 yield=0 writebar=7 readbar=7 waitbar=8}
+  IMAD.X R147, RZ, RZ, R147, P0 {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  LDS.128 R16, [R145+0x220] {stall=5 yield=0 writebar=1 readbar=7 waitbar=0}
+  STG.E.128 desc[UR4][R146.64+0x300], R16 {stall=2 yield=1 writebar=7 readbar=4 waitbar=2}
+  IADD3 R146, P0, PT, R146, 0x8000, RZ {stall=6 yield=0 writebar=7 readbar=7 waitbar=16}
+  IMAD.X R147, RZ, RZ, R147, P0 {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  LDS.128 R16, [R145+0x440] {stall=5 yield=0 writebar=2 readbar=7 waitbar=0}
+  STG.E.128 desc[UR4][R146.64+0x300], R16 {stall=2 yield=1 writebar=7 readbar=5 waitbar=4}
+  IADD3 R146, P0, PT, R146, 0x8000, RZ {stall=6 yield=0 writebar=7 readbar=7 waitbar=32}
+  IMAD.X R147, RZ, RZ, R147, P0 {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  LDS.128 R16, [R145+0x660] {stall=5 yield=0 writebar=0 readbar=7 waitbar=0}
+  STG.E.128 desc[UR4][R146.64+0x300], R16 {stall=2 yield=1 writebar=7 readbar=3 waitbar=1}
+  IADD3 R146, P0, PT, R146, 0x8000, RZ {stall=6 yield=0 writebar=7 readbar=7 waitbar=8}
+  IMAD.X R147, RZ, RZ, R147, P0 {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  LDS.128 R16, [R145+0x880] {stall=5 yield=0 writebar=1 readbar=7 waitbar=0}
+  STG.E.128 desc[UR4][R146.64+0x300], R16 {stall=2 yield=1 writebar=7 readbar=4 waitbar=2}
+  IADD3 R146, P0, PT, R146, 0x8000, RZ {stall=6 yield=0 writebar=7 readbar=7 waitbar=16}
+  IMAD.X R147, RZ, RZ, R147, P0 {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  LDS.128 R16, [R145+0xaa0] {stall=5 yield=0 writebar=2 readbar=7 waitbar=0}
+  STG.E.128 desc[UR4][R146.64+0x300], R16 {stall=2 yield=1 writebar=7 readbar=5 waitbar=4}
+  IADD3 R146, P0, PT, R146, 0x8000, RZ {stall=6 yield=0 writebar=7 readbar=7 waitbar=32}
+  IMAD.X R147, RZ, RZ, R147, P0 {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  LDS.128 R16, [R145+0xcc0] {stall=5 yield=0 writebar=0 readbar=7 waitbar=0}
+  STG.E.128 desc[UR4][R146.64+0x300], R16 {stall=2 yield=1 writebar=7 readbar=3 waitbar=1}
+  IADD3 R146, P0, PT, R146, 0x8000, RZ {stall=6 yield=0 writebar=7 readbar=7 waitbar=8}
+  IMAD.X R147, RZ, RZ, R147, P0 {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  LDS.128 R16, [R145+0xee0] {stall=5 yield=0 writebar=1 readbar=7 waitbar=0}
+  STG.E.128 desc[UR4][R146.64+0x300], R16 {stall=2 yield=1 writebar=7 readbar=4 waitbar=2}
+  IADD3 R146, P0, PT, R146, 0x8000, RZ {stall=6 yield=0 writebar=7 readbar=7 waitbar=16}
+  IMAD.X R147, RZ, RZ, R147, P0 {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  LDS.128 R16, [R145+0x1100] {stall=5 yield=0 writebar=2 readbar=7 waitbar=0}
+  STG.E.128 desc[UR4][R146.64+0x300], R16 {stall=2 yield=1 writebar=7 readbar=5 waitbar=4}
+  IADD3 R146, P0, PT, R146, 0x8000, RZ {stall=6 yield=0 writebar=7 readbar=7 waitbar=32}
+  IMAD.X R147, RZ, RZ, R147, P0 {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  LDS.128 R16, [R145+0x1320] {stall=5 yield=0 writebar=0 readbar=7 waitbar=0}
+  STG.E.128 desc[UR4][R146.64+0x300], R16 {stall=2 yield=1 writebar=7 readbar=3 waitbar=1}
+  IADD3 R146, P0, PT, R146, 0x8000, RZ {stall=6 yield=0 writebar=7 readbar=7 waitbar=8}
+  IMAD.X R147, RZ, RZ, R147, P0 {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  LDS.128 R16, [R145+0x1540] {stall=5 yield=0 writebar=1 readbar=7 waitbar=0}
+  STG.E.128 desc[UR4][R146.64+0x300], R16 {stall=2 yield=1 writebar=7 readbar=4 waitbar=2}
+  IADD3 R146, P0, PT, R146, 0x8000, RZ {stall=6 yield=0 writebar=7 readbar=7 waitbar=16}
+  IMAD.X R147, RZ, RZ, R147, P0 {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  LDS.128 R16, [R145+0x1760] {stall=5 yield=0 writebar=2 readbar=7 waitbar=0}
+  STG.E.128 desc[UR4][R146.64+0x300], R16 {stall=2 yield=1 writebar=7 readbar=5 waitbar=4}
+  IADD3 R146, P0, PT, R146, 0x8000, RZ {stall=6 yield=0 writebar=7 readbar=7 waitbar=32}
+  IMAD.X R147, RZ, RZ, R147, P0 {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  LDS.128 R16, [R145+0x1980] {stall=5 yield=0 writebar=0 readbar=7 waitbar=0}
+  STG.E.128 desc[UR4][R146.64+0x300], R16 {stall=2 yield=1 writebar=7 readbar=3 waitbar=1}
+  IADD3 R146, P0, PT, R146, 0x8000, RZ {stall=6 yield=0 writebar=7 readbar=7 waitbar=8}
+  IMAD.X R147, RZ, RZ, R147, P0 {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  LDS.128 R16, [R145+0x1ba0] {stall=5 yield=0 writebar=1 readbar=7 waitbar=0}
+  STG.E.128 desc[UR4][R146.64+0x300], R16 {stall=2 yield=1 writebar=7 readbar=4 waitbar=2}
+  IADD3 R146, P0, PT, R146, 0x8000, RZ {stall=6 yield=0 writebar=7 readbar=7 waitbar=16}
+  IMAD.X R147, RZ, RZ, R147, P0 {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  LDS.128 R16, [R145+0x1dc0] {stall=5 yield=0 writebar=2 readbar=7 waitbar=0}
+  STG.E.128 desc[UR4][R146.64+0x300], R16 {stall=2 yield=1 writebar=7 readbar=5 waitbar=4}
+  IADD3 R146, P0, PT, R146, 0x8000, RZ {stall=6 yield=0 writebar=7 readbar=7 waitbar=32}
+  IMAD.X R147, RZ, RZ, R147, P0 {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  LDS.128 R16, [R145+0x1fe0] {stall=5 yield=0 writebar=0 readbar=7 waitbar=0}
+  STG.E.128 desc[UR4][R146.64+0x300], R16 {stall=1 yield=1 writebar=7 readbar=3 waitbar=1}
+  WARPSYNC.ALL {stall=5 yield=0 writebar=7 readbar=7 waitbar=0}
+  @P2 SYNCS.ARRIVE.TRANS64.A1T0 RZ, [UR53], RZ {stall=1 yield=1 writebar=7 readbar=4 waitbar=0}
+  IADD3 R14, PT, PT, R14, 0x94, RZ {stall=1 yield=1 writebar=7 readbar=7 waitbar=0}
+  LOP3.LUT R7, R7, 0x80000000, RZ, 0x3c, !PT {stall=5 yield=0 writebar=7 readbar=7 waitbar=0}
+  ISETP.LT.U32.AND P1, PT, R14, 0x200, PT {stall=13 yield=0 writebar=7 readbar=7 waitbar=0}
+  @P1 BRA TILES_19 {stall=13 yield=0 writebar=7 readbar=7 waitbar=0}
+TILES_END_20:
+  EXIT {stall=5 yield=0 writebar=7 readbar=7 waitbar=24}
+ROLE_END_18:
+  EXIT {stall=5 yield=0 writebar=7 readbar=7 waitbar=0}

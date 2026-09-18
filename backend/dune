@@ -1,0 +1,3 @@
+(executable
+ (name warpc)
+ (libraries layouts))

@@ -1,0 +1,138 @@
+
+.version 8.7
+.target sm_100a
+.address_size 64
+.visible .entry umma1(.param .u64 pa, .param .u64 pb, .param .u64 pc)
+{
+  .reg .b32 %r<64>; .reg .b64 %rd<16>; .reg .pred %p<8>; .reg .b32 %f<64>; .reg .b16 %h<4>;
+  .shared .align 1024 .b8 sa[4096];
+  .shared .align 1024 .b8 sb[2048];
+  .shared .align 8 .b64 mbar;
+  .shared .align 4 .b32 tmem_slot;
+  ld.param.u64 %rd0, [pa]; ld.param.u64 %rd1, [pb]; ld.param.u64 %rd2, [pc];
+  cvta.to.global.u64 %rd0, %rd0; cvta.to.global.u64 %rd1, %rd1; cvta.to.global.u64 %rd2, %rd2;
+  mov.u32 %r0, %tid.x;
+  shr.u32 %r1, %r0, 5;          // warp
+  and.b32 %r2, %r0, 31;         // lane
+  // --- warp 0: mbarrier init + TMEM alloc
+  setp.ne.u32 %p0, %r1, 0;
+  @%p0 bra SKIP_ALLOC;
+  mov.u32 %r3, mbar;
+  mbarrier.init.shared::cta.b64 [%r3], 1;
+  fence.mbarrier_init.release.cluster;
+  mov.u32 %r4, tmem_slot;
+  tcgen05.alloc.cta_group::1.sync.aligned.shared::cta.b32 [%r4], 64;
+  tcgen05.relinquish_alloc_permit.cta_group::1.sync.aligned;
+SKIP_ALLOC:
+  tcgen05.fence::before_thread_sync;
+  bar.sync 0;
+  tcgen05.fence::after_thread_sync;
+  // --- stage A: thread t writes row t (16 elements) into the canonical layout
+  // addr(r,k) = (r/8)*SBO + (k/8)*LBO + (r%8)*16 + (k%8)*2
+  mov.u32 %r5, sa;
+  shr.u32 %r6, %r0, 3;  mul.lo.u32 %r6, %r6, 256;
+  and.b32 %r7, %r0, 7;  shl.b32 %r7, %r7, 4;
+  add.u32 %r6, %r6, %r7; add.u32 %r6, %r6, %r5;          // row base in smem
+  mul.wide.u32 %rd3, %r0, 32; add.u64 %rd3, %rd0, %rd3; // row base in global
+  ld.global.b16 %h0, [%rd3+0]; st.shared.b16 [%r6+0], %h0;
+  ld.global.b16 %h0, [%rd3+2]; st.shared.b16 [%r6+2], %h0;
+  ld.global.b16 %h0, [%rd3+4]; st.shared.b16 [%r6+4], %h0;
+  ld.global.b16 %h0, [%rd3+6]; st.shared.b16 [%r6+6], %h0;
+  ld.global.b16 %h0, [%rd3+8]; st.shared.b16 [%r6+8], %h0;
+  ld.global.b16 %h0, [%rd3+10]; st.shared.b16 [%r6+10], %h0;
+  ld.global.b16 %h0, [%rd3+12]; st.shared.b16 [%r6+12], %h0;
+  ld.global.b16 %h0, [%rd3+14]; st.shared.b16 [%r6+14], %h0;
+  ld.global.b16 %h0, [%rd3+16]; st.shared.b16 [%r6+128], %h0;
+  ld.global.b16 %h0, [%rd3+18]; st.shared.b16 [%r6+130], %h0;
+  ld.global.b16 %h0, [%rd3+20]; st.shared.b16 [%r6+132], %h0;
+  ld.global.b16 %h0, [%rd3+22]; st.shared.b16 [%r6+134], %h0;
+  ld.global.b16 %h0, [%rd3+24]; st.shared.b16 [%r6+136], %h0;
+  ld.global.b16 %h0, [%rd3+26]; st.shared.b16 [%r6+138], %h0;
+  ld.global.b16 %h0, [%rd3+28]; st.shared.b16 [%r6+140], %h0;
+  ld.global.b16 %h0, [%rd3+30]; st.shared.b16 [%r6+142], %h0;
+
+  // --- stage B: threads < 64 write row t of Bt
+  setp.ge.u32 %p1, %r0, 64;
+  @%p1 bra SKIP_B;
+  mov.u32 %r5, sb;
+  shr.u32 %r6, %r0, 3;  mul.lo.u32 %r6, %r6, 256;
+  and.b32 %r7, %r0, 7;  shl.b32 %r7, %r7, 4;
+  add.u32 %r6, %r6, %r7; add.u32 %r6, %r6, %r5;
+  mul.wide.u32 %rd3, %r0, 32; add.u64 %rd3, %rd1, %rd3;
+  ld.global.b16 %h0, [%rd3+0]; st.shared.b16 [%r6+0], %h0;
+  ld.global.b16 %h0, [%rd3+2]; st.shared.b16 [%r6+2], %h0;
+  ld.global.b16 %h0, [%rd3+4]; st.shared.b16 [%r6+4], %h0;
+  ld.global.b16 %h0, [%rd3+6]; st.shared.b16 [%r6+6], %h0;
+  ld.global.b16 %h0, [%rd3+8]; st.shared.b16 [%r6+8], %h0;
+  ld.global.b16 %h0, [%rd3+10]; st.shared.b16 [%r6+10], %h0;
+  ld.global.b16 %h0, [%rd3+12]; st.shared.b16 [%r6+12], %h0;
+  ld.global.b16 %h0, [%rd3+14]; st.shared.b16 [%r6+14], %h0;
+  ld.global.b16 %h0, [%rd3+16]; st.shared.b16 [%r6+128], %h0;
+  ld.global.b16 %h0, [%rd3+18]; st.shared.b16 [%r6+130], %h0;
+  ld.global.b16 %h0, [%rd3+20]; st.shared.b16 [%r6+132], %h0;
+  ld.global.b16 %h0, [%rd3+22]; st.shared.b16 [%r6+134], %h0;
+  ld.global.b16 %h0, [%rd3+24]; st.shared.b16 [%r6+136], %h0;
+  ld.global.b16 %h0, [%rd3+26]; st.shared.b16 [%r6+138], %h0;
+  ld.global.b16 %h0, [%rd3+28]; st.shared.b16 [%r6+140], %h0;
+  ld.global.b16 %h0, [%rd3+30]; st.shared.b16 [%r6+142], %h0;
+
+SKIP_B:
+  fence.proxy.async.shared::cta;
+  bar.sync 0;
+  // --- thread 0 issues the MMA and commits to the mbarrier
+  mov.u32 %r4, tmem_slot; ld.shared.u32 %r8, [%r4];     // tmem base address
+  setp.ne.u32 %p2, %r0, 0;
+  @%p2 bra SKIP_MMA;
+  mov.u32 %r9, sa; mov.u32 %r10, sb;
+  // smem descriptor: [13:0] addr>>4, [29:16] LBO>>4, [45:32] SBO>>4, [47:46] version=1, [63:61] layout=0 (no swizzle)
+  shr.u32 %r11, %r9, 4; and.b32 %r11, %r11, 0x3fff;
+  or.b32 %r11, %r11, 524288;
+  mov.b64 %rd4, {%r11, %r12};
+  shr.u32 %r13, %r10, 4; and.b32 %r13, %r13, 0x3fff;
+  or.b32 %r13, %r13, 524288;
+  mov.u32 %r12, 16400;
+  mov.b64 %rd4, {%r11, %r12};
+  mov.b64 %rd5, {%r13, %r12};
+  // instruction descriptor: c_format F32 (bits 4-5 = 1), a/b format F16 (0), a_major=b_major=K (0), n_dim bits 17-22 = N>>3, m_dim bits 24-28 = M>>4
+  mov.u32 %r14, 135266320;
+  setp.ne.u32 %p3, %r0, 0;   // false: do not accumulate into D
+  tcgen05.mma.cta_group::1.kind::f16 [%r8], %rd4, %rd5, %r14, %p3;
+  mov.u32 %r3, mbar;
+  tcgen05.commit.cta_group::1.mbarrier::arrive::one.shared::cluster.b64 [%r3];
+SKIP_MMA:
+  mov.u32 %r3, mbar;
+WAIT:
+  mbarrier.try_wait.parity.shared::cta.b64 %p4, [%r3], 0;
+  @!%p4 bra WAIT;
+  tcgen05.fence::after_thread_sync;
+  // --- each warp reads its 32 lanes x 64 columns
+  shl.b32 %r15, %r1, 21;          // (32*warp) << 16
+  add.u32 %r15, %r8, %r15;
+  tcgen05.ld.sync.aligned.32x32b.x64.b32 {%f0, %f1, %f2, %f3, %f4, %f5, %f6, %f7, %f8, %f9, %f10, %f11, %f12, %f13, %f14, %f15, %f16, %f17, %f18, %f19, %f20, %f21, %f22, %f23, %f24, %f25, %f26, %f27, %f28, %f29, %f30, %f31, %f32, %f33, %f34, %f35, %f36, %f37, %f38, %f39, %f40, %f41, %f42, %f43, %f44, %f45, %f46, %f47, %f48, %f49, %f50, %f51, %f52, %f53, %f54, %f55, %f56, %f57, %f58, %f59, %f60, %f61, %f62, %f63}, [%r15];
+  tcgen05.wait::ld.sync.aligned;
+  // row = 32*warp + lane = tid ; C row-major 128 x 64 f32
+  mul.wide.u32 %rd6, %r0, 256; add.u64 %rd6, %rd2, %rd6;
+  st.global.v4.f32 [%rd6+0], {%f0, %f1, %f2, %f3};
+  st.global.v4.f32 [%rd6+16], {%f4, %f5, %f6, %f7};
+  st.global.v4.f32 [%rd6+32], {%f8, %f9, %f10, %f11};
+  st.global.v4.f32 [%rd6+48], {%f12, %f13, %f14, %f15};
+  st.global.v4.f32 [%rd6+64], {%f16, %f17, %f18, %f19};
+  st.global.v4.f32 [%rd6+80], {%f20, %f21, %f22, %f23};
+  st.global.v4.f32 [%rd6+96], {%f24, %f25, %f26, %f27};
+  st.global.v4.f32 [%rd6+112], {%f28, %f29, %f30, %f31};
+  st.global.v4.f32 [%rd6+128], {%f32, %f33, %f34, %f35};
+  st.global.v4.f32 [%rd6+144], {%f36, %f37, %f38, %f39};
+  st.global.v4.f32 [%rd6+160], {%f40, %f41, %f42, %f43};
+  st.global.v4.f32 [%rd6+176], {%f44, %f45, %f46, %f47};
+  st.global.v4.f32 [%rd6+192], {%f48, %f49, %f50, %f51};
+  st.global.v4.f32 [%rd6+208], {%f52, %f53, %f54, %f55};
+  st.global.v4.f32 [%rd6+224], {%f56, %f57, %f58, %f59};
+  st.global.v4.f32 [%rd6+240], {%f60, %f61, %f62, %f63};
+
+  tcgen05.fence::before_thread_sync;
+  bar.sync 0;
+  @%p0 bra SKIP_DEALLOC;
+  tcgen05.dealloc.cta_group::1.sync.aligned.b32 %r8, 64;
+SKIP_DEALLOC:
+  ret;
+}
