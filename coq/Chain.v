@@ -102,6 +102,18 @@ Fixpoint nof (T : list (nat * nat * Z)) : nat :=
                          end
   end.
 
+(** The SIZE of the shape: the product of its radices. This is what
+    "a flat shape of size [n]" means, and it is NOT [nof]: with chain
+    [w_1 | ... | w_k | n] the radices multiply to [n / w_1], while
+    [nof] telescopes to [w_k * (n / w_k) = n] whatever [w_1] is. The
+    two agree exactly when the chain carries weight [1], which is why
+    [Shape.with_one] puts it there. *)
+Fixpoint tsize (T : list (nat * nat * Z)) : nat :=
+  match T with
+  | [] => 1%nat
+  | (_, m, _) :: rest => (m * tsize rest)%nat
+  end.
+
 (** The head weight, with an irrelevant default. *)
 Definition hw (T : list (nat * nat * Z)) : nat :=
   match T with

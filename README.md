@@ -39,3 +39,17 @@ otherwise.
     opam install . --deps-only
     dune build
     dune test
+
+## Mechanized proofs
+
+The paper's two theorems are proved in Coq under `coq/` --- Lemma 1
+(dense bijections) and Theorem 1 (linear recognition), both as "if and
+only if", with no axioms and no admitted goals:
+
+    make -C coq          # build the proofs
+    ./coq/check.sh       # the mechanized scan vs. Decide.fit_axis
+
+`coq/check.sh` runs both renderings of the scan over every
+`g : [0,n) -> [0,k)` with `g 0 = 0` and checks they accept the same maps
+and recover the same shape. See `coq/README.md` for the correspondence
+with the paper and for what is not covered.
