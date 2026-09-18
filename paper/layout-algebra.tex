@@ -75,8 +75,8 @@ Composing $f$ with $g$ requires only that $f$'s range be exactly $g$'s
 flattened set of coordinates. To emit the index arithmetic, naively, we can
 always compute $f$, split that by division and remainder into $g$'s
 coordinates, and feed it into $g$. Often the composite can be simplified to a
-layout as well. We show that if it can be written this way the form is unique, and we emit that simplified
-form.
+layout as well. We show that when it can be written this way there is a
+coarsest such form, whose digits every other one refines, and we emit that.
 
 A warp's or a thread's slice is a \emph{restriction}. A restricted layout is no
 longer composable, which forces the user to settle the whole view of a tile
@@ -87,7 +87,8 @@ complement, and division, can be reproduced in it. Furthermore, we provide an
 implementation in OCaml, and use it to rederive the atoms and usage patterns of
 CuTe. 
 
-The implementation is roughly 1{,}000 lines of OCaml.
+The implementation is roughly 1{,}000 lines of OCaml, and its two central
+results are proved in Coq.
 \end{abstract}
 
 \section{Introduction}\label{sec:intro}
@@ -2134,6 +2135,27 @@ $n \in \{2,3,4,6,8,9,12\}$ and $k = 5$ if $n \le 4$, $3$ otherwise, that is
 \evalAxisFunctions{} functions, the two accept the same \evalAxisStrided{},
 with the same chain.
 
+\paragraph{The two central results are machine-checked.} Lemma~\ref{lem:dense}
+and Theorem~\ref{thm:decide} are proved in Coq, \evalCoqLines{} lines, each as
+an \emph{if and only if}; no proof is admitted and \texttt{Print Assumptions}
+reports every one closed under the global context. Two things are proved
+differently from the presentation above. The scan is phrased with its residual
+recomputed from the weights committed so far rather than by mutating a copy of
+the first difference: that is the invariant the proof of
+Theorem~\ref{thm:decide} establishes anyway, so it is the same number at every
+step. And the forward direction of Lemma~\ref{lem:dense} avoids the counting
+step of its proof --- that modes $1,\dots,j{-}1$ produce at most $N_{j-1}$
+values --- in favour of the observation that disjoint blocks of $n$ consecutive
+positions covering $[0,M)$ must be the aligned ones, where the covering comes
+from surjectivity and the disjointness from injectivity, so no cardinality
+argument is needed. The mechanized scan and the implementation are checked
+against each other over every $g$ of the enumeration above: they accept the
+same maps and return the same chain. Not mechanized: the separability of
+Lemma~\ref{lem:separable}, which reduces the question to one axis; the
+minimality of the coarsest chain, which the tests check against the
+brute-force oracle; and the reordering of modes by stride, the proofs being
+stated for modes already sorted.
+
 \paragraph{It matters in practice.} The tests build \evalLayouts{} layouts
 --- CuTe's documented examples, CUTLASS's atoms, the usage table of
 Section~\ref{sec:idioms}, and the laws of Section~\ref{sec:ops} --- and every
@@ -2142,10 +2164,16 @@ those, \evalLayoutsAffine{} are affine in their coordinates,
 \evalLayoutsRefined{} are layouts of a refinement with one coordinate split,
 and \evalLayoutsPipeline{} are not layouts and are emitted as composites. On
 \evalPairs{} random composites of a dense bijection
-with a padded storage map, \evalPairsStrided{} are layouts of some refinement,
+with a padded storage map, \evalPairsAffine{} are affine and
+\evalPairsStrided{} are layouts of some refinement,
 and their emitted forms contain \evalPairsOpsEmitted{} divisions and moduli
-where the composites contain \evalPairsOpsPipeline{}. With a random swizzle on
-the storage map, none of \evalSwizzled{} is a layout.
+where the composites contain \evalPairsOpsPipeline{}. Chaining two logical
+stages onto storage rather than one, \evalChainsStrided{} of \evalChains{} are
+still layouts of some refinement, \evalChainsAffine{} of them affine: the
+property survives composition. With a random swizzle on the storage map none of
+\evalSwizzled{} is a layout, though all \evalSwizzledPlainStrided{} of the same
+composites are without it --- the swizzle alone is what costs the strided
+form.
 
 \paragraph{The algebra is enough for a kernel.} The SM90 GMMA $64 \times
 128$ accumulator, built from the SM80 \texttt{mma.m16n8k16} $C$ fragment as

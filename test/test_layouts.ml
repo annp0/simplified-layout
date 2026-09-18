@@ -604,9 +604,10 @@ let () =
   (* swizzle cancellation: g's pre-swizzle addresses along f are
      0,3,4,7,8,11 (not strided) but its swizzle maps them to
      0,2,4,6,8,10 — the composite IS strided, 6a + 2b, only through the
-     xor. The emitter's simplifier never rewrites a nonconstant xor, so
-     this strided form is not recovered (Test_util counts it as
-     affine-through-xor); the composite itself is an ordinary pair. *)
+     xor. The decision procedure is SEMANTIC: it reads [Layout.offset],
+     swizzle included, so it recovers 6*c0 + 2*c1 and the xor does not
+     appear in the emitted form at all (Test_util counts it as affine).
+     Nothing here relies on rewriting an xor symbolically. *)
   let f : Linear.t = Group [ Axis { size = 2; stride = 3 }; Axis { size = 3; stride = 1 } ] in
   let g =
     Layout.with_swizzle
@@ -628,6 +629,8 @@ let () =
       assert (Layout.offset comp Coord.(Tuple [ Idx a; Idx b ]) = (6 * a) + (2 * b))
     done
   done;
+  (* the strided form really is recovered, through the xor *)
+  assert (Layout.to_expr comp = "6*c0 + 2*c1");
   (* fixed-swizzle completeness relies on swizzle injectivity, so
      overlapping fields are excluded by construction: with the
      low-bit-clearing map x ^ (x & 1) — non-injective — the same
