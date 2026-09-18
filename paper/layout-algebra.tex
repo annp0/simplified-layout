@@ -2135,10 +2135,17 @@ $n \in \{2,3,4,6,8,9,12\}$ and $k = 5$ if $n \le 4$, $3$ otherwise, that is
 \evalAxisFunctions{} functions, the two accept the same \evalAxisStrided{},
 with the same chain.
 
-\paragraph{The two central results are machine-checked.} Lemma~\ref{lem:dense}
-and Theorem~\ref{thm:decide} are proved in Coq, \evalCoqLines{} lines, each as
-an \emph{if and only if}; no proof is admitted and \texttt{Print Assumptions}
-reports every one closed under the global context. Two things are proved
+\paragraph{The decision procedure is machine-checked.} Lemma~\ref{lem:dense},
+Lemma~\ref{lem:separable} and Theorem~\ref{thm:decide} are proved in Coq,
+\evalCoqLines{} lines, each as an \emph{if and only if}; no proof is admitted
+and \texttt{Print Assumptions} reports every one closed under the global
+context. Composing them gives the statement about the procedure as a whole:
+the checks of this section --- separability in one pass over the box, then the
+scan of Theorem~\ref{thm:decide} on each axis --- succeed exactly when the map
+is the index function of a layout over a refinement of its domain, plus a
+constant. One direction is what stops a wrong address expression being
+emitted; the other is what makes ``decided rather than searched'' true, since
+it says no simplification is missed. Two things are proved
 differently from the presentation above. The scan is phrased with its residual
 recomputed from the weights committed so far rather than by mutating a copy of
 the first difference: that is the invariant the proof of
@@ -2150,11 +2157,11 @@ positions covering $[0,M)$ must be the aligned ones, where the covering comes
 from surjectivity and the disjointness from injectivity, so no cardinality
 argument is needed. The mechanized scan and the implementation are checked
 against each other over every $g$ of the enumeration above: they accept the
-same maps and return the same chain. Not mechanized: the separability of
-Lemma~\ref{lem:separable}, which reduces the question to one axis; the
-minimality of the coarsest chain, which the tests check against the
-brute-force oracle; and the reordering of modes by stride, the proofs being
-stated for modes already sorted.
+same maps and return the same chain. Not mechanized: the minimality of the
+coarsest chain, which the tests check against the brute-force oracle; the
+regrouping of a nested shape into the flat shape of its leaves; and the
+reordering of modes by stride, the proofs being stated for modes already
+sorted.
 
 \paragraph{It matters in practice.} The tests build \evalLayouts{} layouts
 --- CuTe's documented examples, CUTLASS's atoms, the usage table of

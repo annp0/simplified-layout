@@ -5,5 +5,7 @@ Chain.v
 Recognize.v
 Shape.v
 Complete.v
+Separable.v
+Decide.v
 Dense.v
 Check.v

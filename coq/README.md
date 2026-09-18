@@ -12,8 +12,25 @@ global context* for each main result.
 | Paper | Coq | File |
 |---|---|---|
 | Lemma 1 (dense bijections) | `dense_iff_running` | `Dense.v` |
+| Lemma 2 (separability) | `separable_iff` | `Separable.v` |
 | Lemma 3 (digits as differences of floors) | `dgsum_fsum` | `Chain.v` |
 | Theorem 1 (linear recognition) | `scan_iff`, `scan_sound_layout` | `Complete.v`, `Shape.v` |
+| The whole of `Decide.strided_form` | `decide_iff` | `Decide.v` |
+
+**`decide_iff` is the headline.** It is about the checks the
+implementation actually runs — separability in one pass, then the scan on
+each axis — and says they succeed exactly when the map is the index
+function of a layout over a refinement of its domain, plus a constant:
+
+```coq
+Theorem decide_iff (S : list nat) (f : list nat -> Z) :
+  sizes_pos S ->
+  (IsRefined S f <-> Separable S f /\ AllAccept S (axis_gs S f)).
+```
+
+`decide_sound` is the half that stops a wrong address formula being
+emitted; `decide_complete` is the half that makes "decided, not searched"
+true — no simplification is missed.
 
 **Lemma 1**, both directions:
 
@@ -98,6 +115,17 @@ accepted. That case is left out of the Coq column because `nat` is
 unary and `vm_compute` over 177,147 maps is slow; extraction would be
 the way to include it.
 
+## Radix-1 digits
+
+A chain's weights strictly increase, so a shape carrying a radix-1 digit
+is not a chain. Such a digit is identically zero — `(v / w) mod 1 = 0` —
+so `Decide.drop1` removes it, and the chain reconnects because the weight
+the dropped entry would have contributed is its predecessor's. `wf`,
+`tsize` and `nof` all survive (`nof` only when something survives at all;
+if nothing does then every radix was 1, so the axis has size 1 and the
+scan accepts it with no digits, which is what `Decide.fit_axis`
+short-circuits to for `n = 1`).
+
 ## Not mechanized
 
 - **The coarsest-chain claim.** Theorem 1 also says every accepting
@@ -108,7 +136,8 @@ the way to include it.
   builds the strides from the coefficients by the change of variables,
   which is what the bridge lemma needs; that these equal `g` at the
   weights is proved in the paper but not here.
-- **Separability** (the paper's Lemma 2) and everything above the
-  per-axis question: the mechanization covers one coordinate at a time,
-  which is the part with the theorem in it.
+- **Nested shapes.** The shape is taken flat throughout, as the paper
+  takes it: a nested shape has the coordinates of the flat shape of its
+  leaves, regrouped, and the implementation flattens it the same way
+  (`Decide.leaves`). The regrouping itself is not formalized.
 - **Mode permutation** for Lemma 1, as noted above.
