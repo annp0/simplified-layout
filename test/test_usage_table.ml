@@ -4,6 +4,11 @@
 
 open Layouts
 
+(* Through the emitter oracle, like the other suites: every layout the
+   table's formulas build is checked against [Layout.offset] at every
+   coordinate, and counted. *)
+module Layout = Test_util.Checked_layout
+
 let check name b = if not b then failwith ("usage table: " ^ name)
 
 (* fix a whole coordinate *)
@@ -309,3 +314,4 @@ let () =
     (same_fn zipped (Linear.divide ~by:(Product [ Bound 4; Bound 3 ]) a2))
 
 let () = print_endline "usage table formulas built as printed: passed"
+let () = Test_util.report "usage table"

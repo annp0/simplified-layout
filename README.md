@@ -39,3 +39,16 @@ otherwise.
     opam install . --deps-only
     dune build
     dune test
+
+## The paper's numbers
+
+Every figure in the paper's evaluation is generated from a run of the test
+suite rather than transcribed into the prose:
+
+    ./paper/eval.sh            # rewrite paper/eval-numbers.tex
+    ./paper/eval.sh --check    # fail if it is stale (for CI)
+
+Each suite prints one `#eval KEY VALUE` line per figure; the script sums by
+key across the suites and writes the `\newcommand`s that
+`paper/layout-algebra.tex` inputs. Both random generators are seeded, so a
+rerun on the same tree reproduces every number.

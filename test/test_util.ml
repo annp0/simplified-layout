@@ -106,6 +106,12 @@ let check_expr t =
   then Stdio.printf "%s: %s\n" label (Expr.to_string e)
 ;;
 
+(* Machine-readable counters, for [paper/eval.sh]: one line per number
+   the paper's evaluation quotes. The aggregator sums by key over every
+   suite's output, so a per-suite counter carries no suite in its name
+   and a global one is emitted exactly once. *)
+let emit key value = Stdio.printf "#eval %s %d\n" key value
+
 let report suite =
   Stdio.printf
     "%s: %d layouts oracle-checked; emitted %d affine, %d digits of one variable, %d as a pipeline\n"
@@ -113,7 +119,11 @@ let report suite =
     (!affine + !digits + !carry)
     !affine
     !digits
-    !carry
+    !carry;
+  emit "emit.total" (!affine + !digits + !carry);
+  emit "emit.affine" !affine;
+  emit "emit.digits" !digits;
+  emit "emit.pipeline" !carry
 ;;
 
 module Checked_layout = struct
@@ -126,6 +136,7 @@ module Checked_layout = struct
 
   let of_linear l = checked (of_linear l)
   let storage l = checked (storage l)
+  let divide ~by t = checked (divide ~by t)
   let compose f g = checked (compose f g)
   let with_swizzle t sw = checked (with_swizzle t sw)
   let repeat ~by t = checked (repeat ~by t)

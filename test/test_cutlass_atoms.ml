@@ -323,6 +323,7 @@ let () =
     Linear.interleave ~by:(Linear.canonical (Product [ Bound 4; Bound 16 ])) sm80_c
   in
   let derived = Layout.compose (Layout.of_linear cta_tv) (Layout.of_linear tiled) in
+  let coords = ref 0 in
   for t4 = 0 to 3 do
     for g = 0 to 7 do
       for w = 0 to 3 do
@@ -343,13 +344,15 @@ let () =
                       Tuple
                         [ Tuple [ Idx t4; Idx g; Idx w ]
                         ; Tuple [ Idx vn; Idx vm; Idx nn ]
-                        ]))
+                        ]));
+              incr coords
             done
           done
         done
       done
     done
-  done
+  done;
+  Test_util.emit "sm90.coords" !coords
 ;;
 
 (* ============ the GEMM mainloop dataflow, derived end to end ============

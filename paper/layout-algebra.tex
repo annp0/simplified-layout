@@ -42,6 +42,11 @@
 \newcommand{\N}{\mathbb{N}}
 \newcommand{\Z}{\mathbb{Z}}
 
+% Every figure in Section~\ref{sec:eval} is a macro from here, written by
+% paper/eval.sh from a run of the test suite. Nothing in the evaluation
+% is a number typed by hand.
+\input{eval-numbers}
+
 \title{A Simplified Layout Algebra for GPU Kernels}
 \author{Nan An\\ \texttt{annaneuorg@gmail.com}}
 \date{September 9, 2026}
@@ -2113,23 +2118,34 @@ a shape.
 \section{Evaluation}\label{sec:eval}
 
 The implementation\footnote{\url{https://github.com/annp0/simplified-layout}}
-is 983 lines of OCaml; the tests are 2{,}305.
+is \evalLibLines{} lines of OCaml, over \evalLibMliLines{} lines of
+interface; the tests are \evalTestLines{}. Every figure quoted below is
+generated from a run of the test suite (\texttt{paper/eval.sh}), not
+transcribed: the random generators are seeded, so the numbers are
+reproducible on the tree that produced them.
 
 \paragraph{The decision procedure is correct.} The criterion of
-Lemma~\ref{lem:dense} agrees with enumeration on 400 random layouts. The scan of
+Lemma~\ref{lem:dense} agrees with enumeration on \evalDenseRandom{} random
+layouts. The scan of
 Theorem~\ref{thm:decide} is compared with an oracle that tries every chain of
 divisors of $n$ and checks the strides it forces at every point. Over every
 function $g : [0,n) \to [0,k)$ with $g(0) = 0$, for
 $n \in \{2,3,4,6,8,9,12\}$ and $k = 5$ if $n \le 4$, $3$ otherwise, that is
-186{,}293 functions, the two accept the same 58, with the same chain.
+\evalAxisFunctions{} functions, the two accept the same \evalAxisStrided{},
+with the same chain.
 
-\paragraph{It matters in practice.} Of the 178 layouts the tests build from
-CUTLASS's atoms and CuTe's examples, 147 are affine in their coordinates, 9
-are layouts of a refinement with one coordinate split, and 22 are not layouts
-and are emitted as composites. On 600 random composites of a dense bijection
-with a padded storage map, 524 are layouts of some refinement, and their
-emitted forms contain 686 divisions and moduli where the composites contain
-1{,}026. With a random swizzle on the storage map, none of 300 is a layout.
+\paragraph{It matters in practice.} The tests build \evalLayouts{} layouts
+--- CuTe's documented examples, CUTLASS's atoms, the usage table of
+Section~\ref{sec:idioms}, and the laws of Section~\ref{sec:ops} --- and every
+one of them is checked against its emitted expression at every coordinate. Of
+those, \evalLayoutsAffine{} are affine in their coordinates,
+\evalLayoutsRefined{} are layouts of a refinement with one coordinate split,
+and \evalLayoutsPipeline{} are not layouts and are emitted as composites. On
+\evalPairs{} random composites of a dense bijection
+with a padded storage map, \evalPairsStrided{} are layouts of some refinement,
+and their emitted forms contain \evalPairsOpsEmitted{} divisions and moduli
+where the composites contain \evalPairsOpsPipeline{}. With a random swizzle on
+the storage map, none of \evalSwizzled{} is a layout.
 
 \paragraph{The algebra is enough for a kernel.} The SM90 GMMA $64 \times
 128$ accumulator, built from the SM80 \texttt{mma.m16n8k16} $C$ fragment as
@@ -2137,7 +2153,7 @@ emitted forms contain 686 divisions and moduli where the composites contain
 \divideop\big(\mathrm{canonical}((64,128)),\ (16,8)\big) \circ
 \interleave\big(F_C,\ \mathrm{canonical}((4,16))\big),
 \]
-equals NVIDIA's printed layout at all 8192 coordinates. A GEMM mainloop
+equals NVIDIA's printed layout at all \evalSmNinetyCoords{} coordinates. A GEMM mainloop
 built from the operations alone, an $8 \times 32$ tile of 16-bit elements
 copied in 16-byte vectors by one warp into two shared-memory stages of the
 SW64 atom and read back by \texttt{ldmatrix}, with the writer and reader of

@@ -587,6 +587,7 @@ let () =
     in
     image = List.init size (fun i -> i)
   in
+  let checked = ref 0 in
   for _ = 1 to 200 do
     let k = Random.int 8 in
     let f = random_dense k
@@ -594,8 +595,10 @@ let () =
     (* the symbolic density check agrees with the enumeration oracle *)
     assert (Linear.is_dense f ~size:(1 lsl k) = enum_dense f ~size:(1 lsl k));
     assert (Linear.is_dense g ~size:(1 lsl k) = enum_dense g ~size:(1 lsl k));
+    checked := !checked + 2;
     ignore g
-  done
+  done;
+  Test_util.emit "dense.random" !checked
 
 let () =
   (* swizzle cancellation: g's pre-swizzle addresses along f are

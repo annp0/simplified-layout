@@ -143,7 +143,12 @@ let () =
     !affine
     !strided
     !pipe_ops
-    !out_ops
+    !out_ops;
+  Test_util.emit "pairs.trials" trials;
+  Test_util.emit "pairs.affine" !affine;
+  Test_util.emit "pairs.strided" !strided;
+  Test_util.emit "pairs.ops_pipeline" !pipe_ops;
+  Test_util.emit "pairs.ops_emitted" !out_ops
 ;;
 
 (* ---- chains: two logical stages onto storage ---- *)
@@ -166,7 +171,10 @@ let () =
     "random 3-stage chains: %d; affine maps %d (all decided); strided over a refinement %d\n"
     trials
     !affine
-    !strided
+    !strided;
+  Test_util.emit "chains.trials" trials;
+  Test_util.emit "chains.affine" !affine;
+  Test_util.emit "chains.strided" !strided
 ;;
 
 (* ---- swizzled storage ---- *)
@@ -194,7 +202,10 @@ let () =
     "random swizzled composites: %d; strided over a refinement %d (unswizzled: %d)\n"
     trials
     !strided
-    !strided_unswizzled
+    !strided_unswizzled;
+  Test_util.emit "swizzled.trials" trials;
+  Test_util.emit "swizzled.strided" !strided;
+  Test_util.emit "swizzled.strided_unswizzled" !strided_unswizzled
 ;;
 
 (* ---- the per-axis recognizer, against a brute-force oracle ----
@@ -293,7 +304,9 @@ let () =
   Stdio.printf
     "per-axis recognizer: %d functions checked against brute force, %d strided\n"
     !checked
-    !accepted
+    !accepted;
+  Test_util.emit "axis.functions" !checked;
+  Test_util.emit "axis.strided" !accepted
 ;;
 
 (* weight 1 is a boundary of every refinement, whatever its stride: for
@@ -347,7 +360,8 @@ let () =
             if not (List.mem ws w ~equal:( = ))
             then raise_s [%message "invented a boundary" (n : int) (w : int)])
       done));
-  Stdio.printf "per-axis recognizer: %d constructed mixed-radix forms recovered\n" !built
+  Stdio.printf "per-axis recognizer: %d constructed mixed-radix forms recovered\n" !built;
+  Test_util.emit "axis.constructed" !built
 ;;
 
 let () = Stdio.print_endline "emitter measurement passed"
