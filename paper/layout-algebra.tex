@@ -184,9 +184,10 @@ that they do not come out zero. The consequence is silence rather than a
 diagnostic. Sweeping the \cuteCompTotal{} rank-2 layouts and cotargets of
 Section~\ref{sec:eval}, all of them static, so this is the case CuTe
 \emph{can} check, the complement meets its own documented postconditions for
-every one of the \cuteCompSatisfied{} that satisfy the divisibility condition,
-and fails for \cuteCompViolatedBroken{} of the \cuteCompViolated{} that do
-not --- with no compile-time error, no assertion, and no run-time signal.
+every one of the \cuteCompSatisfied{} that satisfy both divisibility
+conditions, and fails for \cuteCompViolatedBroken{} of the
+\cuteCompViolated{} that do not --- with no compile-time error, no assertion,
+and no run-time signal.
 
 We try to resolve those complexities by restricting what a layout can be.
 
@@ -2162,13 +2163,19 @@ a \texttt{static\_assert}, the one condition it does enforce. Every entry is a
 static integer, so nothing here is hidden from the compiler. Each complement is
 checked against the postconditions CuTe's own unit test asserts: that
 $\cosize(A, A^{*})$ reach $M$, that $A^{*}$ be ordered, and that $A^{*}$ and
-$A$ be disjoint. Of the \cuteCompTotal{} cases, the \cuteCompSatisfied{}
-satisfying $N_0 d_0 \mid d_1$ all pass; of the \cuteCompViolated{} that do
-not, \cuteCompViolatedBroken{} fail. The condition is therefore sufficient and
-not necessary, which is exactly why its absence bites: most violations happen
-to be harmless, nothing distinguishes those from the rest, and the ones that
-are not harmless fail the codomain bound --- never orderedness, never
-disjointness --- without a diagnostic. Measured against CUTLASS 4.8; the
+$A$ be disjoint. Cases are classified by \emph{both} of the complement's
+divisibility conditions, $N_0 d_0 \mid d_1$ and $N_1 d_1 \mid M$. Of the
+\cuteCompTotal{} cases, the \cuteCompSatisfied{} satisfying both all pass; of
+the \cuteCompViolated{} that violate one or the other,
+\cuteCompViolatedBroken{} fail. The conditions are therefore sufficient and
+not necessary, which is exactly why their absence bites: most violations
+happen to be harmless, nothing distinguishes those from the rest, and the ones
+that are not harmless fail the codomain bound --- never orderedness, never
+disjointness --- without a diagnostic. The mechanism is plain in the formula:
+its shape entries are quotients, so when a divisibility fails the integer
+division truncates and the complement simply covers less than it should. For
+$(2,2){:}(1,3)$ at $M = 24$ the entry $d_1 / N_0 d_0 = 3/2$ becomes $1$, and
+$\cosize$ comes out $23$. Measured against CUTLASS 4.8; the
 harness is \texttt{study/run.sh} and needs no GPU.
 
 \paragraph{The decision procedure is machine-checked.} Lemma~\ref{lem:dense},

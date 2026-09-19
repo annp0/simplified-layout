@@ -36,8 +36,13 @@ void one() {
   }
   bool all = p1 && p2 && p3;
 
-  // modes sorted by stride; D0 <= D1 is enforced by the caller
-  constexpr bool cond = (D1 % (N0 * D0)) == 0;
+  // The complement's shape entries are quotients, so BOTH of the paper's
+  // divisibility conditions must hold: N_{i-1} d_{i-1} | d_i for every i,
+  // and N_alpha d_alpha | M. Modes are sorted by stride (D0 <= D1, enforced
+  // by the caller), so for rank 2 that is N_0 d_0 | d_1 and N_1 d_1 | M.
+  constexpr bool cond_stride = (D1 % (N0 * D0)) == 0;
+  constexpr bool cond_target = (M % (N1 * D1)) == 0;
+  constexpr bool cond = cond_stride && cond_target;
   Tally& t = cond ? satisfied : violated;
   ++t.total;
   if (all) ++t.ok; else ++t.broken;
@@ -45,8 +50,9 @@ void one() {
   if (!all) {
     std::printf("  (%d,%d):(%d,%d)  M=%-3d  ->  ", N0, N1, D0, D1, M);
     print(r);
-    std::printf("   cond=%-3s cosize=%-3d %s%s%s\n",
-                cond ? "yes" : "NO", (int)cosize(completed),
+    std::printf("   stride-cond=%-3s target-cond=%-3s cosize=%-3d %s%s%s\n",
+                cond_stride ? "yes" : "NO", cond_target ? "yes" : "NO",
+                (int)cosize(completed),
                 p1 ? "" : "[cosize] ", p2 ? "" : "[ordered] ", p3 ? "" : "[disjoint] ");
   }
 }
