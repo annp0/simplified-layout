@@ -1,0 +1,8 @@
+; The verified scan, as Coq extracts it. Checked in rather than built
+; here: Coq lives in a different opam switch from the project's OCaml
+; deps, so `dune build` must not need it. `coq/extract.sh --check`
+; fails if this has drifted from the proofs.
+(library
+ (name layout_scan_extracted)
+ (modules layout_scan)
+ (flags (:standard -w -a)))

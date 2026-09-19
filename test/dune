@@ -1,5 +1,6 @@
 (tests
- (names test_layouts test_cutlass_atoms test_cute_algebra test_simplifier test_usage_table)
- (libraries layouts base stdio)
+ (names test_layouts test_cutlass_atoms test_cute_algebra test_simplifier test_usage_table
+        test_extracted)
+ (libraries layouts base stdio layout_scan_extracted)
  (preprocess
   (pps ppx_jane)))

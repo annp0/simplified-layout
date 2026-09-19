@@ -2155,9 +2155,13 @@ step of its proof --- that modes $1,\dots,j{-}1$ produce at most $N_{j-1}$
 values --- in favour of the observation that disjoint blocks of $n$ consecutive
 positions covering $[0,M)$ must be the aligned ones, where the covering comes
 from surjectivity and the disjointness from injectivity, so no cardinality
-argument is needed. The mechanized scan and the implementation are checked
-against each other over every $g$ of the enumeration above: they accept the
-same maps and return the same chain. Not mechanized: the minimality of the
+argument is needed. The proved scan and the implementation are not merely
+alike: the scan is extracted from Coq to OCaml and run beside
+\texttt{fit\_axis} on every one of the \evalExtractedMaps{} maps of the
+enumeration above, where they agree on the verdict and, on the
+\evalExtractedStrided{} they accept, digit for digit. The extraction is
+faithful --- no datatype is remapped onto a machine integer --- so nothing is
+assumed of it that the proofs do not establish. Not mechanized: the minimality of the
 coarsest chain, which the tests check against the brute-force oracle; the
 regrouping of a nested shape into the flat shape of its leaves; and the
 reordering of modes by stride, the proofs being stated for modes already

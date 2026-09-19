@@ -73,6 +73,7 @@ BEGIN {
           "chains.trials chains.affine chains.strided " \
           "swizzled.trials swizzled.strided swizzled.strided_unswizzled " \
           "axis.functions axis.strided axis.constructed " \
+          "extracted.maps extracted.strided " \
           "sm90.coords"
 
   macro["lib.lines"]                   = "evalLibLines"
@@ -98,6 +99,8 @@ BEGIN {
   macro["axis.functions"]              = "evalAxisFunctions"
   macro["axis.strided"]                = "evalAxisStrided"
   macro["axis.constructed"]            = "evalAxisConstructed"
+  macro["extracted.maps"]              = "evalExtractedMaps"
+  macro["extracted.strided"]           = "evalExtractedStrided"
   macro["sm90.coords"]                 = "evalSmNinetyCoords"
 }
 
