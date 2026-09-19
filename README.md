@@ -66,3 +66,17 @@ Each suite prints one `#eval KEY VALUE` line per figure; the script sums by
 key across the suites and writes the `\newcommand`s that
 `paper/layout-algebra.tex` inputs. Both random generators are seeded, so a
 rerun on the same tree reproduces every number.
+
+## CuTe, measured
+
+`study/` turns the paper's claim about CuTe's admissibility conditions into
+a measurement, by compiling CuTe's header-only layout algebra on the host
+and checking its complement against the postconditions CuTe's own unit test
+asserts:
+
+    CUTLASS_DIR=... CCCL_DIR=... ./study/run.sh           # measure
+    CUTLASS_DIR=... CCCL_DIR=... ./study/run.sh --check   # fail if stale
+
+No GPU and no CUDA toolkit are needed --- `study/stub/` supplies the handful
+of CUDA declarations the headers include unconditionally. See
+`study/README.md`.
