@@ -20,22 +20,25 @@ items. Neither blocks the preprint. See the bottom of this file.
 `3e9b63b`: no `coq/`, no `study/`, no generated numbers. A reader who
 follows the link sees none of what the paper claims.
 
-**Decision needed:** merge `paper-integration` into `main`, or retarget
-the footnote at the branch. Merging is cleaner; the branch is 9 commits
-and the two parent branches (`reproducible-eval-numbers`,
-`coq-formalization`) are still local if you want to split it into
-reviewable PRs first.
+**DONE** — `paper-integration` fast-forwarded into `main` and pushed, so
+the footnote resolves. The two parent branches
+(`reproducible-eval-numbers`, `coq-formalization`) remain local and
+unpushed; they are now redundant with `main` and can be deleted unless
+you want them for history.
 
-### 2. Author list
-The paper lists Nan An alone (`layout-algebra.tex:50`). **Decision
-needed** on whether this is right for the preprint.
+### 2. Author list — DONE
+Nan An and Xiaotian Zhou.
 
-### 3. Date is stale
-`\date{September 9, 2026}` — pin it to the posting date.
+### 3. Date — DONE (September 19, 2026)
+Re-pin if the posting slips.
 
-### 4. The abstract undersells two of the three contributions
-It mentions Coq once, at the end, and does not mention the CuTe
-measurement at all. As of now the contributions are:
+### 4. Abstract — DONE, worth a read-through
+Now states the mechanization (both halves, the composition into the
+whole procedure, extraction and agreement with the implementation) and
+one sentence on the CuTe measurement. The line count is corrected to
+~1,000 OCaml + ~2,000 Coq. Re-read it for length: the abstract is long,
+and the measurement sentence is the easiest to cut if you want it
+shorter. The three contributions it should convey:
   - the algebra, and the conditions it dissolves;
   - a decision procedure, mechanized end to end and extracted, agreeing
     with the implementation on 186,293 maps;

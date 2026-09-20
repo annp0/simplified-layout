@@ -51,8 +51,9 @@
 \input{../study/cute-numbers}
 
 \title{A Simplified Layout Algebra for GPU Kernels}
-\author{Nan An\\ \texttt{annaneuorg@gmail.com}}
-\date{September 9, 2026}
+\author{Nan An\\ \texttt{annaneuorg@gmail.com}
+  \and Xiaotian Zhou\\ \texttt{xzz5503@psu.edu}}
+\date{September 19, 2026}
 
 \begin{document}
 \maketitle
@@ -88,10 +89,22 @@ before taking slices.
 We validate the algebra by showing that CuTe's operations, such as composition,
 complement, and division, can be reproduced in it. Furthermore, we provide an
 implementation in OCaml, and use it to rederive the atoms and usage patterns of
-CuTe. 
+CuTe.
 
-The implementation is roughly 1{,}000 lines of OCaml, and its two central
-results are proved in Coq.
+The decision procedure is machine-checked. Its two ingredients --- the
+reduction to one coordinate at a time, and the linear-time recognition of a
+layout on that coordinate --- are proved in Coq, each as an \emph{if and only
+if}, with no axioms and no admitted goals; composing them gives the procedure
+as a whole, so that the checks the implementation runs are proved to succeed
+exactly when the map is a layout over a refinement of its domain. The proved
+scan is extracted to OCaml and agrees with the implementation, verdict and
+digits alike, on every map of the enumeration we test. We also measure the
+system we are replacing: CuTe does not check its admissibility conditions in
+general, and where they fail its complement can silently violate the
+postconditions CuTe's own tests assert.
+
+The implementation is roughly 1{,}000 lines of OCaml and the proofs roughly
+2{,}000 of Coq.
 \end{abstract}
 
 \section{Introduction}\label{sec:intro}
