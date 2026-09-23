@@ -88,6 +88,29 @@ let () =
   check "exact reciprocal divides every index in range" !ok
 
 let () =
+  (* the MMA atom: its instruction descriptor against the ones the
+     production kernels load, and the rows of each operand a CTA holds *)
+  let atom ~m ~n ~ctas =
+    Atom.umma ~ab:F16 ~acc:F32 ~m ~n ~ctas ~a_major:K_major ~b_major:K_major ~a_src:Smem_desc
+  in
+  (* CUTLASS 70's SM100_MMA_F16BF16_2x1SM_SS<half,half,float,256,128>: UMOV 0x10200010 *)
+  check "idesc of the 256 x 128 pair MMA is CUTLASS's" (Atom.idesc (atom ~m:256 ~n:128 ~ctas:2) = 0x10200010);
+  (* cuBLAS's nvjet_hss_128x256_64x6_2x1_2cta at 8192^3: UMOV UR15, 0x10400010 *)
+  check "idesc of the 256 x 256 pair MMA is nvjet's" (Atom.idesc (atom ~m:256 ~n:256 ~ctas:2) = 0x10400010);
+  check "K of an f16 MMA is 16" (Atom.umma_k (atom ~m:128 ~n:256 ~ctas:1) = 16);
+  let u = atom ~m:256 ~n:128 ~ctas:2 in
+  let rows l ~cols v = Atom.cta_rows l ~cols ~v in
+  check "the pair splits A's rows in halves"
+    (rows (Atom.umma_a u) ~cols:16 0 = (0, 128) && rows (Atom.umma_a u) ~cols:16 1 = (128, 128));
+  check "the pair splits B's rows in halves"
+    (rows (Atom.umma_b u) ~cols:16 0 = (0, 64) && rows (Atom.umma_b u) ~cols:16 1 = (64, 64));
+  check "the pair splits the result's rows" (rows (Atom.umma_c u) ~cols:128 1 = (128, 128));
+  check "one CTA takes M of 64 or 128 only" (raises (fun () -> atom ~m:256 ~n:128 ~ctas:1));
+  check "a pair takes N in steps of 16" (raises (fun () -> atom ~m:256 ~n:136 ~ctas:2));
+  check "A from tensor memory is K-major"
+    (raises (fun () -> Atom.umma ~ab:F16 ~acc:F32 ~m:128 ~n:128 ~ctas:1 ~a_major:MN_major ~b_major:K_major ~a_src:Tmem))
+
+let () =
   (* every compiled GEMM checks its own derivations; compiling them here
      runs those checks over the shapes the benchmarks use *)
   List.iter

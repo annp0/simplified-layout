@@ -16,7 +16,7 @@ let round_up a m = (a + m - 1) / m * m
 let pow2 n = n > 0 && n land (n - 1) = 0
 
 let rec log2 n = if n <= 1 then 0 else 1 + log2 (n / 2)
-let elem_bytes = function F16 -> 2 | F32 -> 4
+let elem_bytes = Atom.elt_bytes
 
 (* registers *)
 let r_tid = 0 and r_warp = 2 and r_lane = 3 and r_tmp = 4 and r_cnt = 8 and r_tmp2 = 9
@@ -82,11 +82,38 @@ type st =
 
 let new_label st p = st.labels <- st.labels + 1; Printf.sprintf "%s_%d" p st.labels
 
-(* One MMA covers the accumulators of a CTA pair: the leader issues it, and
-   each CTA holds half of each operand. *)
+(* The CTAs one MMA spans, from the instruction the kernel issues. Over a CTA
+   pair the leader issues it and each CTA holds the rows of each operand the
+   atom gives it. *)
+let mma_ctas (k : kernel) = match Dsl2.mma_atom k with Some u -> u.Atom.ctas | None -> 1
+
 let two_cta st =
-  if st.k.pair && st.k.cluster <> 2 then failwith "a two-CTA MMA needs a cluster of 2 along M";
-  st.k.pair
+  let c = mma_ctas st.k in
+  if c > 1 && st.k.cluster <> c then failwith "an MMA over a CTA pair needs a cluster of that pair along M";
+  c = 2
+
+let the_atom (k : kernel) =
+  match Dsl2.mma_atom k with Some u -> u | None -> failwith "the kernel issues no MMA"
+
+(* the MMA that reads a shared tile, and as which operand *)
+let mma_reading (k : kernel) name =
+  let rec walk acc = function
+    | Mma { atom; a; b; _ } ->
+      (if a = name then [ atom, `A ] else []) @ (if b = name then [ atom, `B ] else []) @ acc
+    | Kloop body | Role (_, body) -> List.fold_left walk acc body
+    | _ -> acc
+  in
+  match List.sort_uniq compare (List.fold_left walk [] k.body) with
+  | [] -> None
+  | [ x ] -> Some x
+  | _ -> failwith (name ^ ": read by more than one MMA operand")
+
+(* the rows of an operand, or of the result, the atom gives CTA [v] *)
+let share_rows (u : Atom.umma) which ~v =
+  match which with
+  | `A -> Atom.cta_rows (Atom.umma_a u) ~cols:(Atom.umma_k u) ~v
+  | `B -> Atom.cta_rows (Atom.umma_b u) ~cols:(Atom.umma_k u) ~v
+  | `C -> Atom.cta_rows (Atom.umma_c u) ~cols:u.n ~v
 
 (* the cluster as a rectangle: [cluster] CTAs split an MMA's rows, [cluster_n]
    such pairs work on neighbouring columns of those same rows *)
@@ -128,14 +155,25 @@ let rec reads pred body = List.exists (function Kloop b | Role (_, b) -> reads p
 let tile_layout (k : kernel) (t : stile) =
   let elem = elem_bytes t.sdtype in
   let l = Atom.swizzled_rows ~rows:t.srows ~cols:t.scols ~elem in
-  let by_mma = reads (function Mma { a; b; _ } -> a = t.sname || b = t.sname | _ -> false) k.body in
+  let by_mma = mma_reading k t.sname in
   let by_store = reads (function Store { via; _ } -> via = t.sname | _ -> false) k.body in
   let filled = reads (function Tma { dst; _ } -> dst = t.sname | _ -> false) k.body in
   (match by_mma, by_store with
-   | true, false -> ignore (Atom.umma_kmajor l ~elem ~mma_k:16)
-   | false, true -> ignore (Atom.tma_box l ~elem)
-   | false, false -> failwith (t.sname ^ ": no instruction reads this tile, so nothing fixes its layout")
-   | true, true -> failwith (t.sname ^ ": read both by an MMA and by a store"));
+   | Some (u, which), false ->
+     (* the atom says where the operand is read from, its major, and the rows
+        of it each CTA holds *)
+     (match which, u.a_src with
+      | `A, Atom.Tmem -> failwith (t.sname ^ ": the MMA reads A from tensor memory, not from this tile")
+      | _ -> ());
+     if (match which with `A -> u.a_major | `B -> u.b_major) <> Atom.K_major
+     then failwith (t.sname ^ ": only K-major operands are lowered");
+     if t.sdtype <> u.ab then failwith (t.sname ^ ": the tile's type is not the MMA's operand type");
+     let rows = snd (share_rows u (which :> [ `A | `B | `C ]) ~v:0) in
+     if t.srows <> rows then failwith (Printf.sprintf "%s: the atom gives each CTA %d rows, the tile has %d" t.sname rows t.srows);
+     ignore (Atom.umma_kmajor l ~elem ~mma_k:(Atom.umma_k u))
+   | None, true -> ignore (Atom.tma_box l ~elem)
+   | None, false -> failwith (t.sname ^ ": no instruction reads this tile, so nothing fixes its layout")
+   | Some _, true -> failwith (t.sname ^ ": read both by an MMA and by a store"));
   if filled then ignore (Atom.tma_box l ~elem);
   l
 
@@ -151,7 +189,7 @@ let desc_low st ~ur ~off =
 
 let operand_desc st name =
   let t = stile st name in
-  Atom.umma_kmajor (Hashtbl.find st.layouts name) ~elem:(elem_bytes t.sdtype) ~mma_k:16
+  Atom.umma_kmajor (Hashtbl.find st.layouts name) ~elem:(elem_bytes t.sdtype) ~mma_k:(Atom.umma_k (the_atom st.k))
 
 let lower_wait st p ~stage ~buf =
   let pp = pipe st p in
@@ -364,6 +402,27 @@ let store_body st (p : store_plan) ~release ~buf =
       Sass.utmacmdflush b
     done
 
+(* The first row of an operand CTA rank v loads, relative to the tile origin
+   its load starts from: the atom's share of the operand, less the rows of
+   the result that origin already places this CTA at. The CTA-to-tile map
+   puts the ranks of a pair on consecutive result rows, so a row origin
+   includes the result's share and a column origin includes none. The
+   offset must be a multiple of the rank, by a power of two. *)
+let rank_stride st ~dst ~rows =
+  match mma_reading st.k dst with
+  | None -> 0
+  | Some (u, which) ->
+    let off v =
+      fst (share_rows u (which :> [ `A | `B | `C ]) ~v) - (match rows with Tile_m -> fst (share_rows u `C ~v) | Tile_n -> 0)
+    in
+    let stride = if u.ctas > 1 then off 1 - off 0 else 0 in
+    for v = 0 to u.ctas - 1 do
+      if off v <> v * stride then failwith (dst ^ ": the rows a CTA loads are not a multiple of its rank")
+    done;
+    if off 0 <> 0 then failwith (dst ^ ": rank 0 does not load from the tile origin");
+    if stride <> 0 && not (pow2 stride) then failwith (dst ^ ": the rank's row stride is not a power of two");
+    stride
+
 let rec lower_stmt st ~stage ~buf ~(tx_done : (string, unit) Hashtbl.t) ~(tma_index : int ref) = function
   | Wait p -> lower_wait st p ~stage ~buf
   | Tma { dst; src; rows; pipe = p } ->
@@ -417,14 +476,14 @@ let rec lower_stmt st ~stage ~buf ~(tx_done : (string, unit) Hashtbl.t) ~(tma_in
     end;
     (* the next stage's box starts where this one's K extent ends *)
     Sass.uiadd3 b (g + 2) (g + 2) (snd (Atom.dims (Hashtbl.find st.layouts dst)))
-  | Mma { d = _; a; b = bb } ->
+  | Mma { atom; d = _; a; b = bb } ->
     let b = st.b in
     let da = operand_desc st a and db = operand_desc st bb in
-    (* one MMA consumes 16 of the stage's K columns; the stage's K extent is
-       its layout's *)
+    (* one MMA consumes the atom's K columns of the stage; the stage's K extent
+       is its layout's *)
     let k_of name = snd (Atom.dims (Hashtbl.find st.layouts name)) in
     if k_of a <> k_of bb then failwith "mma: the operands' stages hold different K extents";
-    let steps = k_of a / 16 in
+    let steps = k_of a / Atom.umma_k atom in
     (* only the very first MMA of the kernel overwrites the accumulator; that
        one reads a flag the loop body sets, every other one accumulates *)
     let kept = st.k.depth <= 4 in
@@ -477,12 +536,10 @@ let rec lower_stmt st ~stage ~buf ~(tx_done : (string, unit) Hashtbl.t) ~(tma_in
       (fun i (dst, rows) ->
         let g = ur_tma.(i) in
         Sass.umov b (g + 2) 0;
-        match rows with
-        | Tile_m -> Sass.uiadd3 b (g + 3) ur_tile_m 0
-        | Tile_n ->
-          if two_cta st
-          then Sass.ulea b (g + 3) ur_rank_x ur_tile_n (log2 (stile st dst).srows)
-          else Sass.uiadd3 b (g + 3) ur_tile_n 0)
+        let origin = match rows with Tile_m -> ur_tile_m | Tile_n -> ur_tile_n in
+        match rank_stride st ~dst ~rows with
+        | 0 -> Sass.uiadd3 b (g + 3) origin 0
+        | stride -> Sass.ulea b (g + 3) ur_rank_x origin (log2 stride))
       tmas;
     (match tmas with
      | [] -> ()
@@ -498,14 +555,15 @@ let rec lower_stmt st ~stage ~buf ~(tx_done : (string, unit) Hashtbl.t) ~(tma_in
        Sass.mov_imm b r_tmp2 tx);
     (match List.find_opt (function Mma _ -> true | _ -> false) body with
      | None -> ()
-     | Some (Mma { a; b = bb; _ }) ->
+     | Some (Mma { atom; d; a; b = bb }) ->
        Sass.umov b ur_mma_count 0;
        Sass.umov b ur_zero 0;
-       (* the instruction descriptor states the MMA's shape: M rows over
-          the pair for a two-CTA MMA, N the accumulator's columns *)
-       let acc = List.hd st.k.tmem in
-       let m_rows = acc.trows * (if two_cta st then 2 else 1) and n_cols = acc.tcols in
-       Sass.umov b ur_idesc ((1 lsl 4) lor ((n_cols lsr 3) lsl 17) lor ((m_rows lsr 4) lsl 24));
+       (* the accumulator holds the rows of the result the atom gives this CTA,
+          and all its columns *)
+       let acc = ttile st d in
+       if acc.trows <> snd (share_rows atom `C ~v:0) || acc.tcols <> atom.n
+       then failwith (d ^ ": the accumulator is not the result rows the atom gives a CTA");
+       Sass.umov b ur_idesc (Atom.idesc atom);
        Sass.umov b (ur_da + 1) (Atom.desc_high (operand_desc st a));
        Sass.umov b (ur_db + 1) (Atom.desc_high (operand_desc st bb));
        if s <= 4

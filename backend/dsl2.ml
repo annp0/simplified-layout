@@ -8,8 +8,9 @@
    that consumes it fixes its layout, and every copy is compiled from the
    layouts of its two ends (see Atom, Lower2). *)
 
-type dtype =
+type dtype = Atom.elt =
   | F16
+  | BF16
   | F32
 
 type via =
@@ -70,7 +71,10 @@ type stmt =
       }
   | Wait of string
   | Mma of
-      { d : string
+      { atom : Atom.umma
+          (* the instruction: it fixes the operands' layouts, which CTA holds
+             which of their rows, and the accumulator's *)
+      ; d : string (* d[i, j] += a[i, k] b[j, k] *)
       ; a : string
       ; b : string
       }
@@ -96,9 +100,8 @@ type kernel =
   ; tmem : ttile list
   ; pipes : pipe list
   ; nwarps : int
-  ; cluster : int (* CTAs along M: the pair a two-CTA MMA splits its rows over *)
-  ; cluster_n : int (* CTAs along N: the pairs that share the same operand rows *)
-  ; pair : bool (* one MMA over a CTA pair: each CTA holds half of each operand *)
+  ; cluster : int (* CTAs along M: the CTAs one MMA spans *)
+  ; cluster_n : int (* CTAs along N: the groups that share the same operand rows *)
   ; tile_m : int
   ; tile_n : int
   ; tile_k : int
@@ -169,7 +172,14 @@ let choose ~m ~n ~k =
 
 let gemm ?(tile_m = 128) ?(tile_n = 128) ?(tile_k = 64) ?bufs ?(cluster = 1) ?(cluster_n = 1) ?(pair = false)
     ~m ~n ~k ~depth () =
-  let bsplit = if pair then 2 else 1 in
+  (* One instruction per 16 columns of K: M rows over the CTAs it spans, N the
+     accumulator's columns. [pair] asks for the CTA-pair form. *)
+  let ctas = if pair then 2 else 1 in
+  let atom =
+    Atom.umma ~ab:F16 ~acc:F32 ~m:(tile_m * ctas) ~n:tile_n ~ctas ~a_major:K_major ~b_major:K_major ~a_src:Smem_desc
+  in
+  (* each CTA stages the rows of A and of B the atom gives it *)
+  let rows_of l = snd (Atom.cta_rows l ~cols:(Atom.umma_k atom) ~v:0) in
   { name = Printf.sprintf "pgemm_%d_%d_%d_s%d_t%d" m n k depth tile_n
   ; params =
       [ { name = "c"; dtype = F32; rows = m; cols = n; via = Tmap }
@@ -183,8 +193,8 @@ let gemm ?(tile_m = 128) ?(tile_n = 128) ?(tile_k = 64) ?bufs ?(cluster = 1) ?(c
        wrong, and half of it per CTA is what makes their 230 KB of shared
        memory hold eight stages. *)
   ; smem =
-      [ { sname = "sa"; sdtype = F16; srows = tile_m; scols = tile_k; ring = Stages }
-      ; { sname = "sb"; sdtype = F16; srows = tile_n / bsplit; scols = tile_k; ring = Stages }
+      [ { sname = "sa"; sdtype = F16; srows = rows_of (Atom.umma_a atom); scols = tile_k; ring = Stages }
+      ; { sname = "sb"; sdtype = F16; srows = rows_of (Atom.umma_b atom); scols = tile_k; ring = Stages }
         (* one 32 x 32 block of the accumulator per warp, two deep so a block
            is written while the copy engine still reads the previous one *)
       ; { sname = "sc"; sdtype = F32; srows = 32; scols = 32; ring = Per_warp 2 }
@@ -217,13 +227,12 @@ let gemm ?(tile_m = 128) ?(tile_n = 128) ?(tile_k = 64) ?bufs ?(cluster = 1) ?(c
        the one the measurements favour *)
   ; cluster
   ; cluster_n
-  ; pair
   ; tile_m; tile_n; tile_k; k_total = k; tile_m_count = m / tile_m; tile_n_count = n / tile_n
   ; body =
       [ Role ([ 0 ], [ Kloop [ Wait "empty"; Tma { dst = "sa"; src = "a"; rows = Tile_m; pipe = "full" }; Tma { dst = "sb"; src = "bt"; rows = Tile_n; pipe = "full" } ] ])
       ; Role
           ( [ 1 ]
-          , [ Wait "free"; Kloop [ Wait "full"; Mma { d = "acc"; a = "sa"; b = "sb" }; Commit "empty" ]; Commit "ready" ] )
+          , [ Wait "free"; Kloop [ Wait "full"; Mma { atom; d = "acc"; a = "sa"; b = "sb" }; Commit "empty" ]; Commit "ready" ] )
       ; Role ([ 4; 5; 6; 7 ], [ Wait "ready"; Store { dst = "c"; src = "acc"; via = "sc"; release = Some "free" } ])
       ]
   }
@@ -241,6 +250,18 @@ let only_used (k : kernel) =
   let used = List.fold_left names [] k.body in
   { k with smem = List.filter (fun (t : stile) -> List.mem t.sname used) k.smem }
 
+(* the kernel's MMA instruction; a kernel issues one kind *)
+let mma_atom (k : kernel) =
+  let rec walk acc = function
+    | Mma { atom; _ } -> atom :: acc
+    | Kloop b | Role (_, b) -> List.fold_left walk acc b
+    | _ -> acc
+  in
+  match List.sort_uniq compare (List.fold_left walk [] k.body) with
+  | [] -> None
+  | [ a ] -> Some a
+  | _ -> failwith "a kernel issues one kind of MMA"
+
 (* a probe: warp 0 loads one k tile by TMA and waits for it to land *)
 let tma_probe ~m ~n ~k =
   let g = gemm ~m ~n ~k ~depth:1 () in
@@ -253,12 +274,13 @@ let tma_probe ~m ~n ~k =
 (* probes: MMAs without the epilogue; the epilogue without MMAs *)
 let mma_probe ~m ~n ~k ~depth =
   let g = gemm ~m ~n ~k ~depth () in
+  let atom = Option.get (mma_atom g) in
   only_used
   { g with
     name = Printf.sprintf "pmma_%d_%d_%d_s%d" m n k depth
   ; body =
       [ Role ([ 0 ], [ Kloop [ Wait "empty"; Tma { dst = "sa"; src = "a"; rows = Tile_m; pipe = "full" }; Tma { dst = "sb"; src = "bt"; rows = Tile_n; pipe = "full" } ] ])
-      ; Role ([ 1 ], [ Kloop [ Wait "full"; Mma { d = "acc"; a = "sa"; b = "sb" }; Commit "empty" ]; Commit "ready"; Wait "ready" ]) ] }
+      ; Role ([ 1 ], [ Kloop [ Wait "full"; Mma { atom; d = "acc"; a = "sa"; b = "sb" }; Commit "empty" ]; Commit "ready"; Wait "ready" ]) ] }
 
 let epi_probe ~m ~n ~k =
   let g = gemm ~m ~n ~k ~depth:1 () in
@@ -267,13 +289,13 @@ let epi_probe ~m ~n ~k =
     name = Printf.sprintf "pepi_%d_%d_%d_s1" m n k
   ; body = [ Role ([ 1 ], [ Commit "ready"; Wait "free" ]); Role ([ 4; 5; 6; 7 ], [ Wait "ready"; Store { dst = "c"; src = "acc"; via = "sc"; release = Some "free" } ]) ] }
 
-let dtype_string = function F16 -> "f16" | F32 -> "f32"
+let dtype_string = Atom.elt_string
 let coord_string = function Tile_m -> "tile_m" | Tile_n -> "tile_n"
 
 let rec stmt_string ind = function
   | Tma { dst; src; rows; pipe } -> Printf.sprintf "%s%s[stage] <- tma %s[%s rows, k tile]  -> %s" ind dst src (coord_string rows) pipe
   | Wait p -> ind ^ "wait " ^ p
-  | Mma { d; a; b } -> Printf.sprintf "%s%s += %s[stage] . %s[stage]^T" ind d a b
+  | Mma { atom; d; a; b } -> Printf.sprintf "%s%s += %s[stage] . %s[stage]^T  by %s" ind d a b (Atom.umma_string atom)
   | Commit p -> ind ^ "commit " ^ p
   | Signal p -> ind ^ "signal " ^ p
   | Store { dst; src; via; release } ->
@@ -288,8 +310,8 @@ let to_string k =
     "\n"
     ([ Printf.sprintf "kernel %s (%s)" k.name
          (String.concat ", " (List.map (fun (g : gmat) -> Printf.sprintf "%s : %s[%d,%d]%s" g.name (dtype_string g.dtype) g.rows g.cols (if g.via = Tmap then " via tma" else "")) k.params))
-     ; Printf.sprintf "  tile %dx%d, k tile %d, ring depth %d, %d warps, cluster %dx%d%s" k.tile_m k.tile_n k.tile_k
-         k.depth k.nwarps k.cluster k.cluster_n (if k.pair then ", two-CTA MMA" else "") ]
+     ; Printf.sprintf "  tile %dx%d, k tile %d, ring depth %d, %d warps, cluster %dx%d" k.tile_m k.tile_n k.tile_k
+         k.depth k.nwarps k.cluster k.cluster_n ]
      @ List.map
          (fun (s : stile) ->
            Printf.sprintf "  smem %s : %s[%d,%d] x %s" s.sname (dtype_string s.sdtype) s.srows s.scols
