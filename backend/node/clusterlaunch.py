@@ -41,3 +41,35 @@ def launch_cluster(func, grid, block, args, shared_mem=0, cluster=(1, 1, 1), syn
         r = lib.cuCtxSynchronize()
         if r != 0:
             raise RuntimeError('cuCtxSynchronize: %d' % r)
+
+
+def time_cluster(func, grid, block, args, shared_mem=0, cluster=(1, 1, 1), repeat=20):
+    """Mean device time per launch, in ms: the launch is built once and issued
+    [repeat] times back to back between two CUDA events, as the plain launch
+    is timed -- so the host's cost per launch is not measured as kernel time."""
+    lib = L._load_cuda()
+    launch_cluster(func, grid, block, args, shared_mem, cluster, sync=True)  # binds, warms
+    params, keep = L._build_params(args)
+    attr = LaunchAttribute()
+    attr.id = CU_LAUNCH_ATTRIBUTE_CLUSTER_DIMENSION
+    attr.value.clusterDim[0], attr.value.clusterDim[1], attr.value.clusterDim[2] = cluster
+    cfg = LaunchConfig(grid[0], grid[1], grid[2], block[0], block[1], block[2], shared_mem, None,
+                       ctypes.pointer(attr), 1)
+    start, stop = ctypes.c_void_p(), ctypes.c_void_p()
+    lib.cuEventCreate(ctypes.byref(start), 0)
+    lib.cuEventCreate(ctypes.byref(stop), 0)
+    lib.cuEventRecord(start, None)
+    for _ in range(repeat):
+        r = lib.cuLaunchKernelEx(ctypes.byref(cfg), func._handle, params, None)
+        if r != 0:
+            raise RuntimeError('cuLaunchKernelEx: %d' % r)
+    lib.cuEventRecord(stop, None)
+    r = lib.cuEventSynchronize(stop)
+    if r != 0:
+        raise RuntimeError('cuEventSynchronize: %d' % r)
+    ms = ctypes.c_float()
+    lib.cuEventElapsedTime(ctypes.byref(ms), start, stop)
+    lib.cuEventDestroy_v2(start)
+    lib.cuEventDestroy_v2(stop)
+    del keep
+    return ms.value / repeat

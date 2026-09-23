@@ -7,7 +7,7 @@ sys.path.insert(0, os.environ.get('CUPATCH', os.path.expanduser('~/cupatch-new/c
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from cupatch.cuda import launcher as L
 from sasm import assemble
-from clusterlaunch import launch_cluster
+from clusterlaunch import launch_cluster, time_cluster
 
 CU_TENSOR_MAP_DATA_TYPE_FLOAT16 = 6
 CU_TENSOR_MAP_DATA_TYPE_FLOAT32 = 7
@@ -106,12 +106,8 @@ def run(path, M, N, K, repeat=20, seed=1):
             hit = np.argwhere(np.abs(ref - C[r0, c0]) < 1e-3)
             print("   nonzero bad (%d,%d) got %s ; ref has that value at %s" % (r0, c0, C[r0,c0], hit[:4].tolist()))
     if cl > 1:
-        import time
-        t0 = time.perf_counter()
-        for _ in range(repeat):
-            launch_cluster(func, grid, block, args, shared_mem=dyn, cluster=(cl, 1, 1), sync=False)
-        launch_cluster(func, grid, block, args, shared_mem=dyn, cluster=(cl, 1, 1), sync=True)
-        ms = (time.perf_counter() - t0) * 1000.0 / (repeat + 1)
+        # device time, between CUDA events, as the plain launch below is timed
+        ms = time_cluster(func, grid, block, args, shared_mem=dyn, cluster=(cl, 1, 1), repeat=repeat)
     else:
         ms = func.launch(grid=grid, block=block, args=args, shared_mem=dyn, timed=True, repeat=repeat)
     flops = 2.0 * M * N * K

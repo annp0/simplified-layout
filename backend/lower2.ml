@@ -215,6 +215,155 @@ let release_to_pair st p ~stage ~buf =
     Sass.syncs_arrive_red st.b ~guard:p_lane0 ~base:ur_peer_bar ~imm:0
   end
 
+(* Everything a store needs, derived and checked, with nothing emitted: the
+   layouts it composes, the expressions it will emit, the immediates. *)
+type store_plan =
+  { sp_dst : string
+  ; e_ld : Expr.t
+  ; imm_ld : int array
+  ; e_copy : Expr.t
+  ; e_y : Expr.t
+  ; imm_y : int array
+  ; x0 : int
+  ; imm_x : int array
+  ; sts : (Space.thread_value, Space.physical) Layout.t
+  ; sp_n : int
+  ; vec : int
+  ; sp_elem : int
+  ; copy : int
+  ; copies : int
+  ; blocks_n : int
+  }
+
+let store_plan st ~dst ~src ~via =
+    let acc = ttile st src and sc = stile st via in
+    let box = Hashtbl.find st.layouts via in
+    let copies =
+      match sc.ring with Per_warp n -> n | Stages -> failwith (via ^ ": a staging tile has copies per warp")
+    in
+    let copy = Hashtbl.find st.copy_bytes via in
+    let n = sc.scols and elem = elem_bytes sc.sdtype in
+    if sc.srows <> Atom.ldtm_block then failwith (via ^ ": a warp's block has the 32 rows of its lane quarter");
+    let blocks_m = acc.trows / Atom.ldtm_block and blocks_n = acc.tcols / n in
+    (* The tensor-memory load's fragment, dealt over the accumulator's blocks
+       and composed with the accumulator's layout, is the load's address map;
+       Atom checks it against what one warp-uniform address reads. *)
+    let frag = Atom.ldtm_32x32b ~n in
+    let block = Shape.Product [ Bound Atom.ldtm_block; Bound n ] in
+    let grid = Linear.canonical (Product [ Bound blocks_m; Bound blocks_n ]) in
+    let ld =
+      Layout.compose
+        (Layout.interleave ~by:grid frag)
+        (Layout.divide ~by:block (Atom.tmem_accumulator ~rows:acc.trows ~cols:acc.tcols))
+    in
+    Atom.check_ldtm ld ~blocks_m ~blocks_n ~n;
+    let rt = Shape.Bound blocks_m in
+    let w_of = function Coord.Idx w -> w | Tuple _ -> assert false in
+    let e_ld, imm_ld =
+      split ~name:"tensor-memory load" ~rt ~n:blocks_n (fun c ch ->
+        Layout.offset ld (Coord.Tuple [ Tuple [ Idx (w_of c); Idx ch ]; Tuple [ Idx 0; Idx 0 ] ]))
+    in
+    (* The staging write is the same fragment composed with the staging tile's
+       layout -- the box the copy engine reads -- so a register's address is
+       where the store will look for it. *)
+    let sts = Layout.compose frag box in
+    if not (Layout.is_injective sts) then failwith (via ^ ": two values of a fragment land on one address");
+    let vec = 16 / elem in
+    for l = 0 to Atom.ldtm_block - 1 do
+      for q = 0 to (n / vec) - 1 do
+        let a e = Layout.offset sts (Coord.Tuple [ Idx l; Idx ((vec * q) + e) ]) in
+        if a 0 mod 16 <> 0 then failwith "store: a register vector is not 16-byte aligned";
+        for e = 1 to vec - 1 do
+          if a e <> a 0 + (e * elem) then failwith "store: a register vector is not contiguous"
+        done
+      done
+    done;
+    (* A block's place in the output is its place in the tile's division into
+       blocks; the copy engine takes it as a coordinate pair. *)
+    let tile : (Space.logical, Space.logical) Layout.t =
+      Layout.divide ~by:block (Layout.of_linear (Linear.canonical (Product [ Bound acc.trows; Bound acc.tcols ])))
+    in
+    let origin c ch = Layout.offset tile (Coord.Tuple [ Tuple [ Idx 0; Idx 0 ]; Tuple [ Idx (w_of c); Idx ch ] ]) in
+    let e_y, imm_y = split ~name:"store row" ~rt ~n:blocks_n (fun c ch -> origin c ch / acc.tcols) in
+    let e_x, imm_x = split ~name:"store column" ~rt ~n:blocks_n (fun c ch -> origin c ch mod acc.tcols) in
+    let x0 = match e_x with Expr.Const k -> k | _ -> failwith "store: a block's column depends on the warp" in
+    (* the warp's copies of the staging tile: the copies of the block row it
+       reads *)
+    let e_copy = Expr.scale (copies * copy) (Expr.var "c") in
+    (* The runtime coordinate of all of these is the block row, which the load
+       fixes to the warp's lane quarter. *)
+    { sp_dst = dst; e_ld; imm_ld; e_copy; e_y; imm_y; x0; imm_x; sts; sp_n = n; vec; sp_elem = elem; copy; copies
+    ; blocks_n }
+
+let quarter e = Expr.bind "c" (Expr.modulo (Expr.var "warpid") 4) e
+
+(* Once per kernel, before the tile loop: the addresses that depend only on
+   the warp and the lane -- where this warp's staging copies are and where
+   each of its lane's vectors goes in them. They are the same for every tile,
+   and emitting them here takes them off the path from the accumulator being
+   ready to its first store. *)
+let store_setup st (p : store_plan) =
+  let b = st.b in
+  let em = Emit.create b ~scratch in
+  let range = hw_range st and reg = hw_reg in
+  Emit.into em ~range ~reg (quarter p.e_copy) ~dst:r_stage;
+  Sass.lea_ur b r_stage r_stage ur_smem 0;
+  Sass.iadd3_c b r_stage r_stage st.epi_off;
+  Sass.r2ur b ur_esrc r_stage;
+  for q = 0 to (p.sp_n / p.vec) - 1 do
+    let e = Restricted.expr (Restricted.restrict ~at:(Parts [ Free; At (p.vec * q) ]) p.sts) in
+    Emit.into em ~range ~reg (Expr.bind "c0" (Expr.var "laneid") e) ~dst:(r_swz + q);
+    Sass.iadd3 b (r_swz + q) (r_swz + q) r_stage
+  done;
+  st.max_reg <- max st.max_reg (max em.high (r_swz + (p.sp_n / p.vec) - 1))
+
+(* per tile: the accumulator buffer's load address and the output row, then
+   the blocks *)
+let store_body st (p : store_plan) ~release ~buf =
+  let b = st.b in
+  let n = p.sp_n and vec = p.vec and elem = p.sp_elem and copy = p.copy and copies = p.copies in
+  let em = Emit.create b ~scratch in
+  let range = hw_range st and reg = hw_reg in
+  Emit.into em ~range ~reg (quarter p.e_ld) ~dst:r_tmp2;
+  Sass.lea_ur b r_tmp2 r_tmp2 ur_acc 0;
+  Sass.r2ur b ur_epi r_tmp2;
+  Emit.into em ~range ~reg (quarter p.e_y) ~dst:r_tmp;
+  Sass.lea_ur b r_tmp r_tmp ur_tile_m 0;
+  Sass.r2ur b ur_ey r_tmp;
+  st.max_reg <- max st.max_reg em.high;
+  let imm_ld = p.imm_ld and imm_x = p.imm_x and imm_y = p.imm_y and x0 = p.x0 and blocks_n = p.blocks_n in
+  let dst = p.sp_dst in
+    for ch = 0 to blocks_n - 1 do
+      let d = r_data.(ch mod 2) and slot = ch mod copies in
+      Sass.ldtm_off b d ~n ~addr:ur_epi ~imm:imm_ld.(ch);
+      st.max_reg <- max st.max_reg (d + n - 1);
+      (* The copy this block goes into was last read by the store [copies]
+         blocks back -- in this tile or the previous one. Stores finish in
+         order, so at most [copies - 1] may still be reading when it is
+         rewritten: the rest keep going while this block is staged. *)
+      Sass.depbar_le b ~n:(copies - 1);
+      for q = 0 to (n / vec) - 1 do
+        Sass.sts_r b ~width:(8 * vec * elem) ~r:(r_swz + q) ~imm:(slot * copy) ~data:(d + (vec * q))
+      done;
+      (* the stores have taken the last block's values, so the load that
+         produced them has landed: the accumulator is free for the next tile's
+         MMAs while its last blocks are still being written out *)
+      if ch = blocks_n - 1 then (match release with Some p -> release_to_pair st p ~stage:0 ~buf | None -> ());
+      (* The copy engine reads the staging copy, so the writes into it must
+         have landed, not merely issued: a read scoreboard only says the store
+         has taken its data out of the registers. The fence publishes them to
+         the async proxy and the wait comes after it -- waiting first leaves
+         the youngest stores unpublished and the engine reads the sixteen bytes
+         they were about to overwrite. *)
+      Sass.fence_view_async b;
+      Sass.warpsync b;
+      Sass.uiadd3 b ur_st ur_esrc (slot * copy);
+      Sass.uiadd3 b (ur_st + 1) ur_tile_n (x0 + imm_x.(ch));
+      Sass.uiadd3 b (ur_st + 2) ur_ey imm_y.(ch);
+      Sass.utmastg b ~g:ur_st ~map:(ur_param (param_index st dst));
+      Sass.utmacmdflush b
+    done
+
 let rec lower_stmt st ~stage ~buf ~(tx_done : (string, unit) Hashtbl.t) ~(tma_index : int ref) = function
   | Wait p -> lower_wait st p ~stage ~buf
   | Tma { dst; src; rows; pipe = p } ->
@@ -315,113 +464,7 @@ let rec lower_stmt st ~stage ~buf ~(tx_done : (string, unit) Hashtbl.t) ~(tma_in
     then Sass.utcbar_mc st.b ~mbar:(mbar_reg st p ~stage ~buf) ~mask
     else Sass.utcbar st.b ~mbar:(mbar_reg st p ~stage ~buf)
   | Signal p -> release_to_pair st p ~stage ~buf
-  | Store { dst; src; via; release } ->
-    let b = st.b in
-    let acc = ttile st src and sc = stile st via in
-    let box = Hashtbl.find st.layouts via in
-    let copies =
-      match sc.ring with Per_warp n -> n | Stages -> failwith (via ^ ": a staging tile has copies per warp")
-    in
-    let copy = Hashtbl.find st.copy_bytes via in
-    let n = sc.scols and elem = elem_bytes sc.sdtype in
-    if sc.srows <> Atom.ldtm_block then failwith (via ^ ": a warp's block has the 32 rows of its lane quarter");
-    let blocks_m = acc.trows / Atom.ldtm_block and blocks_n = acc.tcols / n in
-    (* The tensor-memory load's fragment, dealt over the accumulator's blocks
-       and composed with the accumulator's layout, is the load's address map;
-       Atom checks it against what one warp-uniform address reads. *)
-    let frag = Atom.ldtm_32x32b ~n in
-    let block = Shape.Product [ Bound Atom.ldtm_block; Bound n ] in
-    let grid = Linear.canonical (Product [ Bound blocks_m; Bound blocks_n ]) in
-    let ld =
-      Layout.compose
-        (Layout.interleave ~by:grid frag)
-        (Layout.divide ~by:block (Atom.tmem_accumulator ~rows:acc.trows ~cols:acc.tcols))
-    in
-    Atom.check_ldtm ld ~blocks_m ~blocks_n ~n;
-    let rt = Shape.Bound blocks_m in
-    let w_of = function Coord.Idx w -> w | Tuple _ -> assert false in
-    let e_ld, imm_ld =
-      split ~name:"tensor-memory load" ~rt ~n:blocks_n (fun c ch ->
-        Layout.offset ld (Coord.Tuple [ Tuple [ Idx (w_of c); Idx ch ]; Tuple [ Idx 0; Idx 0 ] ]))
-    in
-    (* The staging write is the same fragment composed with the staging tile's
-       layout -- the box the copy engine reads -- so a register's address is
-       where the store will look for it. *)
-    let sts = Layout.compose frag box in
-    if not (Layout.is_injective sts) then failwith (via ^ ": two values of a fragment land on one address");
-    let vec = 16 / elem in
-    for l = 0 to Atom.ldtm_block - 1 do
-      for q = 0 to (n / vec) - 1 do
-        let a e = Layout.offset sts (Coord.Tuple [ Idx l; Idx ((vec * q) + e) ]) in
-        if a 0 mod 16 <> 0 then failwith "store: a register vector is not 16-byte aligned";
-        for e = 1 to vec - 1 do
-          if a e <> a 0 + (e * elem) then failwith "store: a register vector is not contiguous"
-        done
-      done
-    done;
-    (* A block's place in the output is its place in the tile's division into
-       blocks; the copy engine takes it as a coordinate pair. *)
-    let tile : (Space.logical, Space.logical) Layout.t =
-      Layout.divide ~by:block (Layout.of_linear (Linear.canonical (Product [ Bound acc.trows; Bound acc.tcols ])))
-    in
-    let origin c ch = Layout.offset tile (Coord.Tuple [ Tuple [ Idx 0; Idx 0 ]; Tuple [ Idx (w_of c); Idx ch ] ]) in
-    let e_y, imm_y = split ~name:"store row" ~rt ~n:blocks_n (fun c ch -> origin c ch / acc.tcols) in
-    let e_x, imm_x = split ~name:"store column" ~rt ~n:blocks_n (fun c ch -> origin c ch mod acc.tcols) in
-    let x0 = match e_x with Expr.Const k -> k | _ -> failwith "store: a block's column depends on the warp" in
-    (* the warp's copies of the staging tile: the copies of the block row it
-       reads *)
-    let e_copy = Expr.scale (copies * copy) (Expr.var "c") in
-    (* The runtime coordinate of all of these is the block row, which the load
-       fixes to the warp's lane quarter. *)
-    let quarter e = Expr.bind "c" (Expr.modulo (Expr.var "warpid") 4) e in
-    let em = Emit.create b ~scratch in
-    let range = hw_range st and reg = hw_reg in
-    Emit.into em ~range ~reg (quarter e_ld) ~dst:r_tmp2;
-    Sass.lea_ur b r_tmp2 r_tmp2 ur_acc 0;
-    Sass.r2ur b ur_epi r_tmp2;
-    Emit.into em ~range ~reg (quarter e_copy) ~dst:r_stage;
-    Sass.lea_ur b r_stage r_stage ur_smem 0;
-    Sass.iadd3_c b r_stage r_stage st.epi_off;
-    Sass.r2ur b ur_esrc r_stage;
-    Emit.into em ~range ~reg (quarter e_y) ~dst:r_tmp;
-    Sass.lea_ur b r_tmp r_tmp ur_tile_m 0;
-    Sass.r2ur b ur_ey r_tmp;
-    for q = 0 to (n / vec) - 1 do
-      let e = Restricted.expr (Restricted.restrict ~at:(Parts [ Free; At (vec * q) ]) sts) in
-      Emit.into em ~range ~reg (Expr.bind "c0" (Expr.var "laneid") e) ~dst:(r_swz + q);
-      Sass.iadd3 b (r_swz + q) (r_swz + q) r_stage
-    done;
-    st.max_reg <- max st.max_reg (max em.high (r_swz + (n / vec) - 1));
-    for ch = 0 to blocks_n - 1 do
-      let d = r_data.(ch mod 2) and slot = ch mod copies in
-      Sass.ldtm_off b d ~n ~addr:ur_epi ~imm:imm_ld.(ch);
-      st.max_reg <- max st.max_reg (d + n - 1);
-      (* The copy this block goes into was last read by the store [copies]
-         blocks back -- in this tile or the previous one. Stores finish in
-         order, so at most [copies - 1] may still be reading when it is
-         rewritten: the rest keep going while this block is staged. *)
-      Sass.depbar_le b ~n:(copies - 1);
-      for q = 0 to (n / vec) - 1 do
-        Sass.sts_r b ~width:(8 * vec * elem) ~r:(r_swz + q) ~imm:(slot * copy) ~data:(d + (vec * q))
-      done;
-      (* the stores have taken the last block's values, so the load that
-         produced them has landed: the accumulator is free for the next tile's
-         MMAs while its last blocks are still being written out *)
-      if ch = blocks_n - 1 then (match release with Some p -> release_to_pair st p ~stage:0 ~buf | None -> ());
-      (* The copy engine reads the staging copy, so the writes into it must
-         have landed, not merely issued: a read scoreboard only says the store
-         has taken its data out of the registers. The fence publishes them to
-         the async proxy and the wait comes after it -- waiting first leaves
-         the youngest stores unpublished and the engine reads the sixteen bytes
-         they were about to overwrite. *)
-      Sass.fence_view_async b;
-      Sass.warpsync b;
-      Sass.uiadd3 b ur_st ur_esrc (slot * copy);
-      Sass.uiadd3 b (ur_st + 1) ur_tile_n (x0 + imm_x.(ch));
-      Sass.uiadd3 b (ur_st + 2) ur_ey imm_y.(ch);
-      Sass.utmastg b ~g:ur_st ~map:(ur_param (param_index st dst));
-      Sass.utmacmdflush b
-    done
+  | Store { dst; src; via; release } -> store_body st (store_plan st ~dst ~src ~via) ~release ~buf
   | Kloop body ->
     ignore buf;
     let b = st.b in
@@ -770,6 +813,16 @@ let lower (k : kernel) : string list =
      partner only as far as the ring lets it. *)
   let grid = if total_tiles <= Dsl2.sms then total_tiles else Dsl2.sms / ctas k * ctas k in
   let persistent = grid < total_tiles in
+  (* A k loop whose tiles the ring does not divide ends part way round it,
+     with the stages it used one phase ahead of the rest; the next tile would
+     start at stage 0 regardless. Carrying the ring position across tiles is
+     not done yet, so a persistent kernel refuses that case rather than emit
+     a kernel that waits on the wrong phase. *)
+  if persistent && k.k_total / k.tile_k mod k.depth <> 0
+  then
+    failwith
+      (Printf.sprintf "ring depth %d does not divide the %d k tiles of a persistent kernel" k.depth
+         (k.k_total / k.tile_k));
   Sass.isetp_ne_u32 b p_role r_warp alloc_warp;
   Sass.bra b p_role "INIT_DONE";
   (* Fetch the tensor maps now, while the barriers are set up: the first load
@@ -840,6 +893,13 @@ let lower (k : kernel) : string list =
            barrier belonging to a buffer completes exactly once per pass, and
            its parity flips once per pass like a stage barrier. A CTA that runs
            out of tiles part way through a pass skips the rest of it. *)
+        (* a store's tile-invariant addresses, once, before the first tile *)
+        let rec stores acc = function
+          | Store { dst; src; via; _ } -> (dst, src, via) :: acc
+          | Kloop b | Role (_, b) -> List.fold_left stores acc b
+          | _ -> acc
+        in
+        List.iter (fun (dst, src, via) -> store_setup st (store_plan st ~dst ~src ~via)) (List.fold_left stores [] body);
         let tl = new_label st "TILES" in
         let tl_end = new_label st "TILES_END" in
         (* In a pair, the MMA and every stage barrier it waits on are the
