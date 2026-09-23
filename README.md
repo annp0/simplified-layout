@@ -26,11 +26,15 @@ otherwise.
       decide        is this map a layout? the decision procedure of the paper's Section 4
       expr          the emitted integer expressions
     backend/
-      dsl2          the warp-level DSL: operands, stages, accumulators, pipes, roles
-      lower2        lowering to registers, barriers, tile mapping
+      dsl2          the warp-level DSL: operands, tiles, accumulators, pipes, roles
+      atom          the layouts the instructions fix, and the deciders that read
+                    an encoding back off a layout
+      lower2        lowering: copies compiled from both ends' layouts, pipes, roles
+      emit          address expressions to instructions
       sched         control words: stalls, scoreboards, wait masks
       sass          the instructions we emit, tcgen05 and TMA included
-      node/sasm.py  the assembler driver and ELF writer
+      test_derive   the derivations against what the device and ptxas use
+      node/         sasm.py (assembler driver, ELF writer), run_tma.py (launch, check)
     test/
       test_layouts        the operations and their laws, against enumeration
       test_cute_algebra   CuTe's documented examples of composition, complement, division, product
@@ -47,18 +51,51 @@ otherwise.
 
 ## warpc
 
-`backend/` is a compiler for warp-level GPU kernels that emits SASS for
-Blackwell (sm_100a) directly, with no PTX in the path. A kernel is a set of
-warp roles over a ring of shared-memory stages; the operand addresses come from
-the algebra in `lib/`, where a fragment's per-lane address is a composed layout
-lowered to shifts and masks.
+`backend/` compiles warp-level kernels to SASS for Blackwell (sm_100a)
+directly, with no PTX in the path. A kernel is a set of warp roles over shared
+tiles, tensor-memory accumulators and mbarrier pipes. Tiles are declared by
+shape only: the instruction that consumes a tile fixes its layout, and every
+copy is compiled from the layouts of its two ends.
+
+Concretely, for the GEMM below every address the kernel computes, every
+descriptor field and every tensor-map box is read off a layout of `lib/`:
+
+- `backend/atom.ml` holds the layouts the instructions fix, as values of the
+  algebra: the K-major SWIZZLE_128B operand a UMMA descriptor describes, the
+  SWIZZLE_128B image of a tensor-map box, the tensor-memory accumulator, the
+  fragment of `tcgen05.ld.32x32b`. Each comes with a decider that reads the
+  instruction's encoding back off a layout and compares the image it
+  describes with the layout at every coordinate, so a layout the instruction
+  cannot express is refused at compile time.
+- A copy is the moving instruction's fragment composed with the storage at
+  each end. The load from tensor memory is the fragment dealt over the
+  accumulator's blocks (`interleave`) composed with the accumulator divided
+  into blocks (`divide`); the staging write is the same fragment composed
+  with the staging tile's layout. The composites are checked — injective,
+  vectors contiguous and aligned, the load's warp-uniform-address contract —
+  and their strided forms (`Decide`), or their pipelines sliced at the
+  compile-time coordinates (`Restricted`), are what `backend/emit.ml` turns
+  into instructions. The CTA-to-tile map is a layout too, emitted from its
+  decided strided form.
+- The host encodes each tensor map from the `.tmap` lines the kernel emits,
+  so it cannot disagree with the addresses the kernel computes.
+
+`backend/test_derive.ml` pins the derivations against what the device and
+ptxas use: the derived operand descriptor's high word is `0x40004040`, the word
+CUTLASS's mainloop loads; the derived staging addresses are the ones measured
+exact on the device.
 
 ### A program
 
-The whole GEMM, as written in the DSL (`backend/dsl2.ml`). Three roles: one
-warp feeds the ring by TMA, one drives the tensor core, four write the
-accumulator out.
+The GEMM as written in the DSL (`backend/dsl2.ml`). One warp feeds the ring by
+TMA, one drives the tensor core, four write the accumulator out through a
+staging tile.
 
+    smem =
+      [ { sname = "sa"; sdtype = F16; srows = tile_m; scols = tile_k; ring = Stages }
+      ; { sname = "sb"; sdtype = F16; srows = tile_n; scols = tile_k; ring = Stages }
+      ; { sname = "sc"; sdtype = F32; srows = 32;     scols = 32;     ring = Per_warp 2 } ]
+    ...
     body =
       [ Role ([0],
           [ Kloop [ Wait "empty"
@@ -69,72 +106,67 @@ accumulator out.
           ; Kloop [ Wait "full"; Mma { d = "acc"; a = "sa"; b = "sb" }; Commit "empty" ]
           ; Commit "ready" ])
       ; Role ([4;5;6;7],
-          [ Wait "ready"; Store { dst = "c"; src = "acc"; release = Some "free" } ])
-      ]
+          [ Wait "ready"; Store { dst = "c"; src = "acc"; via = "sc"; release = Some "free" } ]) ]
 
-The declarations around it name the stages and the handshakes: `sa` and `sb`
-are shared-memory tiles held `depth` deep, `acc` is a tensor-memory
-accumulator, and `full`, `empty`, `ready`, `free` are mbarriers, one per stage
-or per accumulator. The compiler prints what it read back before it emits:
-
-    kernel pgemm_4096_4096_4096_s4_t256 (c : f32[4096,4096], a : f16[4096,4096] via tma, ...)
-      tile 128x256, k tile 64, ring depth 4, 8 warps, cluster of 1
-      smem sa : f16[128,64] x depth
-      smem sb : f16[256,64] x depth
-      tmem acc : f32[128,256] x 1 buffers
-      pipe full[stage], 1 arrival
-      pipe empty[stage], 1 arrival, free at start
-      warps 0
-        for each k tile (stage = k mod depth)
-          wait empty
-          sa[stage] <- tma a[tile_m rows, k tile]  -> full
-          sb[stage] <- tma bt[tile_n rows, k tile]  -> full
-      warps 1
-        wait free
-        for each k tile (stage = k mod depth)
-          wait full
-          acc += sa[stage] . sb[stage]^T
-          commit empty
-        commit ready
-      warps 4,5,6,7
-        wait ready
-        c[tile, rows of warp] <- acc, then free
-
-Everything below that line is ours: the tile-to-CTA map, the TMA descriptors,
-the mbarrier phases and their parity, tensor-memory allocation, the epilogue's
-swizzled staging and TMA store, register allocation, and the control word on
-every instruction.
+No statement names a layout. `sa` and `sb` get theirs from the `Mma` that
+reads them, `sc` from the tensor-map store that reads it, `acc` from the MMA
+that writes it; the `Tma` that fills `sa` and the warps that write `sc` are
+compiled against those layouts, and refused if the instruction cannot produce
+them.
 
 ### Benchmarks
 
-fp16 inputs, fp32 accumulate, one idle B200, 30 iterations. Every warpc result
-is bit-exact against numpy. CUTLASS is example 70_blackwell_fp16_gemm built
-from source with CUDA 12.9, measured back to back with ours.
+fp16 inputs, fp32 accumulate, one idle B200, 30 iterations each, measured in
+one session. CUTLASS is example 70_blackwell_fp16_gemm built from source with
+CUDA 12.9. Every warpc result equals numpy's; the inputs are integers in
+[-3, 3], so the fp32 sums are exact and equality is the right test for the
+addressing, not a statement about rounding.
 
     shape                warpc     CUTLASS
-    1024^3               245.9       250.4
-    1536^3               662.9       543.7
-    2048^3               978.6      1009.2
-    4096^3              1324.1      1516.9
-    8192^3              1585.7      1259.9
-    16384^3             1644.0      1281.0
-    4096x4096x1024       875.7      1062.4
-    3072x1280x2048       890.3       955.2
-    8192x2048x4096      1372.8      1492.5
+    1024^3               242.9       247.3
+    1536^3               647.2       538.5
+    2048^3               972.0      1017.4
+    4096^3              1327.2      1513.8
+    8192^3              1587.0      1260.2
+    16384^3             1639.2      1281.4
+    4096x4096x1024       871.1      1056.8
+    3072x1280x2048       914.8       959.2
+    8192x2048x4096      1373.2      1494.3
                                     TFLOP/s
 
-We are ahead from 8192 cubed up, by 26 to 28 per cent, and at 1536 cubed by 22.
-We are behind at 4096 cubed and at short K. The cause is the schedule, not the
-code we emit for it: CUTLASS runs a two-CTA MMA on a 2x2 cluster, so an operand
-slice crosses memory once per pair of CTAs rather than once per CTA, which
-matters most where operand traffic dominates. That schedule is expressible here
-and is being brought up; it is not yet correct, so it is not the default.
+Ahead at 1536 cubed and from 8192 cubed up, behind elsewhere, by up to 18 per
+cent at short K. The shapes where warpc leads are the ones where CUTLASS's
+own kernel falls off (1514 at 4096 cubed, 1260 at 8192). The comparison is
+not like for like: CUTLASS runs a two-CTA MMA on a 2x2 cluster, which moves
+each operand slice once per pair of CTAs; warpc runs one CTA per tile.
+
+### What it is not yet
+
+- One program. The statements are specialised to this GEMM's instructions:
+  `Tma` is a 2-D box, `Mma` is f16, K-major, M = 128, `Store` is tensor memory
+  to a staging tile to a tensor-map store. Only the 128-byte swizzle is
+  supported, each further mode needing its own check on the device.
+- No layout conversion. Nothing yet derives the staging and swizzle that
+  take one fragment layout to another; the staging tile is declared.
+- The schedule is written, not searched. Roles, ring depth, warp assignment
+  and the tile-width rule are the program's; registers are a fixed map in
+  `lower2.ml`; `sched.ml` keeps program order and decides only stalls,
+  scoreboards and wait masks.
+- The cluster and two-CTA MMA (`--cluster X Y --pair`) run but are not
+  correct: about one value in 10^4 is wrong, in the columns the partner CTA's
+  half of B supplies, so the leader is reading that half before it lands.
+  CUTLASS's own schedule is therefore not yet transcribed, and the table
+  above is not the like-for-like comparison.
+- Shapes must be multiples of the tiles (128, and 256 or 128, and 64); there
+  is no predication for ragged edges.
 
 ### Running one
 
-    dune build
+    dune build && dune test
     ./_build/default/backend/warpc.exe pgemm 4096 4096 4096 4 > k.sass
 
-`warpc` writes SASS with a header naming the launch parameters.
-`backend/node/sasm.py` assembles it and writes a cubin, using cupatch as the
-encoder; the driver loads and launches it.
+`warpc` writes SASS with a header naming the launch: registers, shared memory,
+grid, cluster, and a `.tmap` line per tensor map. `backend/node/sasm.py`
+assembles it into a cubin with cupatch (silares-ai/cupatch) as the encoder,
+and `backend/node/run_tma.py` encodes the tensor maps from the header,
+launches it, and checks it against numpy.

@@ -92,9 +92,9 @@ let strided_form t =
   Decide.strided_form ~shape:(shape t) ~offset:(offset t)
 ;;
 
-let to_expr t =
+let expr t =
   match strided_form t with
-  | Some e -> Expr.to_string e
+  | Some e -> e
   | None ->
     let rec pins path (at : Coord.partial) =
       match at with
@@ -103,7 +103,7 @@ let to_expr t =
       | Parts ps -> List.concat (List.mapi ps ~f:(fun j p -> pins (path @ [ j ]) p))
     in
     let env = pins [] t.at in
-    Expr.to_string
-      (Expr.subst (Layout.expr t.layout) (fun n ->
-         List.Assoc.find env n ~equal:String.equal))
+    Expr.subst (Layout.expr t.layout) (fun n -> List.Assoc.find env n ~equal:String.equal)
 ;;
+
+let to_expr t = Expr.to_string (expr t)

@@ -1,30 +1,30 @@
 (* Lowering of the second DSL: TMA into a ring of swizzled shared-memory
    stages, tcgen05 MMA out of them into tensor memory, mbarrier pipes
-   between the roles, one CTA per output tile. *)
+   between the roles, a tensor-map store of the accumulator.
 
+   Every address, offset, descriptor field and tensor-map box below is read
+   off a layout. The instruction that consumes a tile fixes the tile's layout
+   (Atom); a copy is compiled from the layouts of its two ends by composing
+   the moving instruction's fragment with the storage it reads or writes;
+   the composite's strided form, or its pipeline, is what Emit turns into
+   instructions. Nothing here writes a lane's address by hand. *)
+
+open Layouts
 open Dsl2
 
 let round_up a m = (a + m - 1) / m * m
 let pow2 n = n > 0 && n land (n - 1) = 0
 
-(* the smallest shift whose reciprocal divides exactly over [0, bound): the
-   divisor is a tile count known at compile time, so this is a search, not an
-   approximation, and it fails loudly rather than quietly rounding *)
-let exact_recip d bound =
-  let rec search sh =
-    if sh > 30 then failwith "no exact reciprocal for the tile count"
-    else
-      let m = ((1 lsl sh) / d) + 1 in
-      let rec ok t = t >= bound || ((t * m) lsr sh = t / d && ok (t + 1)) in
-      if m * (bound - 1) < 0x40000000 && ok 0 then (m, sh) else search (sh + 1)
-  in
-  search 1
 let rec log2 n = if n <= 1 then 0 else 1 + log2 (n / 2)
 let elem_bytes = function F16 -> 2 | F32 -> 4
 
 (* registers *)
 let r_tid = 0 and r_warp = 2 and r_lane = 3 and r_tmp = 4 and r_cnt = 8 and r_tmp2 = 9
-let r_caddr = 10 and r_tilen = 12 and r_tilem = 13 and r_tile = 14 and r_stage = 144 and r_stage2 = 145 and r_ptr = 146 and r_lrow = 148 and r_lcol = 149 and r_rows = 152 and r_back = 184 and r_swz = 216
+let r_tilen = 12 and r_tilem = 13 and r_tile = 14 and r_stage = 144 and r_swz = 216
+
+(* registers an emission site may use for its intermediate values; dead once
+   the site's results have been read *)
+let scratch = List.init 64 (fun i -> 152 + i)
 let r_parity = [| 5; 6; 7; 15 |] (* one parity register per pipe, by declaration order *)
 let r_data = [| 16; 80 |] (* two 64-register epilogue buffers *)
 let p_role = 1 and p_lane0 = 2 and p_loop = 3 and p_lead = 4
@@ -50,7 +50,8 @@ let up_issue_b = 3
 let ur_da = 36 and ur_db = 38 and ur_zero = 40 and ur_idesc = 41
 let ur_tma = [| 44; 48 |] and ur_epi = 25
 let ur_st = 44 (* the store group, only live in the epilogue *)
-let ur_wid = 23 (* this warp's index within the epilogue group *)
+let ur_esrc = 23 (* this warp's copy of the staging tile *)
+let ur_ey = 0 (* the row coordinate of this warp's blocks *)
 
 (* Scratch for the two operand descriptor bases of the stage being issued.
    Keeping one per stage would cost a register per stage and the pipeline needs
@@ -72,6 +73,8 @@ type st =
   ; slot_off : int (* the TMEM address slot, window offset *)
   ; smem_base : int (* the register holding the shared-memory base *)
   ; epi_off : int (* window offset of the epilogue staging area *)
+  ; layouts : (string, (Space.logical, Space.physical) Layout.t) Hashtbl.t (* each shared tile's *)
+  ; copy_bytes : (string, int) Hashtbl.t (* the space one copy of a shared tile takes *)
   ; mutable labels : int
   ; mutable max_reg : int
   ; mutable mma_seen : int (* MMAs emitted in the current loop body *)
@@ -79,9 +82,11 @@ type st =
 
 let new_label st p = st.labels <- st.labels + 1; Printf.sprintf "%s_%d" p st.labels
 
-(* One MMA covers the accumulators of a CTA pair: the leader issues it, and the
-   operands are each CTA's own rows of A with the columns of B they share. *)
-let two_cta st = st.k.cluster = 2 && Sys.getenv_opt "WARPC_MMA2CTA" <> None
+(* One MMA covers the accumulators of a CTA pair: the leader issues it, and
+   each CTA holds half of each operand. *)
+let two_cta st =
+  if st.k.pair && st.k.cluster <> 2 then failwith "a two-CTA MMA needs a cluster of 2 along M";
+  st.k.pair
 
 (* the cluster as a rectangle: [cluster] CTAs split an MMA's rows, [cluster_n]
    such pairs work on neighbouring columns of those same rows *)
@@ -109,31 +114,51 @@ let mbar_reg_of_slot slot =
 let mbar_reg st p ~stage ~buf =
   let slot = mbar_slot st p ~stage ~buf in
   if slot < 8 then 26 + slot else if slot < 20 then 52 + (slot - 8) else failwith "out of barrier registers" 
-let stage_bytes_of (s : stile) = s.srows * s.scols * elem_bytes s.sdtype
+(* the bytes a layout's image spans: through the last byte of the element at
+   its largest offset *)
+let footprint l ~elem = elem + List.fold_left (fun m c -> max m (Layout.offset l c)) 0 (Coord.enumerate (Layout.shape l))
 
-(* the 128-byte swizzled K-major UMMA descriptor of a tile starting at
-   window offset [off] (the swizzle atom is 8 rows x 128 bytes; SBO = 1024).
-   The address sits in the low word; the shape fields never change. *)
-let desc_high = (1024 lsr 4) lor (1 lsl 14) lor (2 lsl 29)
+(* The layout of a shared tile is fixed by the instruction that reads it: an
+   MMA operand is the K-major SWIZZLE_128B image its descriptor describes, a
+   store's staging tile the SWIZZLE_128B box the copy engine reads. The other
+   access to the tile -- the load that fills an operand, the warps that write
+   the staging tile -- is compiled against that layout and checked there. *)
+let rec reads pred body = List.exists (function Kloop b | Role (_, b) -> reads pred b | s -> pred s) body
 
-let sw128_desc_low st ~ur ~off =
+let tile_layout (k : kernel) (t : stile) =
+  let elem = elem_bytes t.sdtype in
+  let l = Atom.swizzled_rows ~rows:t.srows ~cols:t.scols ~elem in
+  let by_mma = reads (function Mma { a; b; _ } -> a = t.sname || b = t.sname | _ -> false) k.body in
+  let by_store = reads (function Store { via; _ } -> via = t.sname | _ -> false) k.body in
+  let filled = reads (function Tma { dst; _ } -> dst = t.sname | _ -> false) k.body in
+  (match by_mma, by_store with
+   | true, false -> ignore (Atom.umma_kmajor l ~elem ~mma_k:16)
+   | false, true -> ignore (Atom.tma_box l ~elem)
+   | false, false -> failwith (t.sname ^ ": no instruction reads this tile, so nothing fixes its layout")
+   | true, true -> failwith (t.sname ^ ": read both by an MMA and by a store"));
+  if filled then ignore (Atom.tma_box l ~elem);
+  l
+
+(* the MMA descriptor of an operand tile placed at window offset [off]: the
+   start address in the low word with the fixed leading-offset field, SBO and
+   the layout type in the high word, all read off the tile's layout *)
+let desc_low st ~ur ~off =
   let b = st.b in
   Sass.uiadd3 b ur ur_smem off;
   Sass.ushf_r b ur ur 4;
   Sass.ulop3_and b ur ur 0x3fff;
-  Sass.ulop3_or b ur ur (1 lsl 16)
+  Sass.ulop3_or b ur ur Atom.desc_low_fixed
 
-(* the descriptor of k chunk [j] of a stage: the base address plus 32 bytes
-   per chunk, which is 2 in the descriptor's units *)
-let sw128_descriptor st ~ur ~base ~j = Sass.uiadd3 st.b ur base (2 * j)
+let operand_desc st name =
+  let t = stile st name in
+  Atom.umma_kmajor (Hashtbl.find st.layouts name) ~elem:(elem_bytes t.sdtype) ~mma_k:16
 
 let lower_wait st p ~stage ~buf =
   let pp = pipe st p in
   let r = r_parity.(Hashtbl.find st.pipe_index p) in
   let l = new_label st "WAIT" in
   Sass.label st.b l;
-  let pr = if pp.per_stage || Sys.getenv_opt "WARPC_LEGACY_PARITY" = None then Some r else None in
-  Sass.syncs_trywait st.b 0 ~base:(mbar_reg st p ~stage ~buf) ~imm:0 ~parity_reg:pr;
+  Sass.syncs_trywait st.b 0 ~base:(mbar_reg st p ~stage ~buf) ~imm:0 ~parity_reg:(Some r);
   Sass.bra st.b ~neg:true 0 l;
 
   (* a barrier used once per tile completes a phase here; one used once per
@@ -142,8 +167,7 @@ let lower_wait st p ~stage ~buf =
      buffer -- all advance one phase per pass over the group, so their shared
      parity flips once per pass, where the pass ends. A barrier used once per
      tile completes its phase right here. *)
-  if (not pp.per_stage) && (not pp.per_buffer) && Sys.getenv_opt "WARPC_LEGACY_PARITY" = None
-  then Sass.lop3_xor_imm st.b r r 0x80000000
+  if (not pp.per_stage) && not pp.per_buffer then Sass.lop3_xor_imm st.b r r 0x80000000
 
 (* The pair shares one accumulator: the tensor core wrote half of it into each
    CTA, so the leader may not start the next tile until the partner's epilogue
@@ -157,6 +181,31 @@ let tma_pipe_of (k : kernel) name =
     | _ -> false
   in
   List.exists walk k.body
+
+let ttile st name = List.find (fun (t : ttile) -> t.tname = name) st.k.tmem
+
+(* the hardware coordinates a fragment's thread coordinates stand for *)
+let hw_reg = function "warpid" -> r_warp | "laneid" -> r_lane | v -> failwith ("unbound coordinate " ^ v)
+let hw_range st = function "warpid" -> st.k.nwarps | "laneid" -> 32 | v -> failwith ("unbound coordinate " ^ v)
+
+(* A value over runtime coordinates [rt] and a compile-time index 0 .. n-1,
+   emitted as one expression in the runtime coordinates plus an immediate per
+   index. The expression is the strided form of the map at index 0, decided;
+   each immediate is read off by evaluation, and the split is refused unless
+   the index shifts the value by the same amount at every runtime point. *)
+let split ~name ~rt ~n f =
+  let pts = Coord.enumerate rt in
+  let e =
+    match Decide.strided_form ~shape:rt ~offset:(fun c -> f c 0) with
+    | Some e -> e
+    | None -> failwith (name ^ ": no strided form over the runtime coordinates")
+  in
+  let imm k =
+    match List.sort_uniq compare (List.map (fun c -> f c k - f c 0) pts) with
+    | [ d ] -> d
+    | _ -> failwith (name ^ ": the compile-time index does not shift the value by a constant")
+  in
+  e, Array.init n imm
 
 let release_to_pair st p ~stage ~buf =
   Sass.syncs_arrive st.b ~guard:p_lane0 ~base:(mbar_reg st p ~stage ~buf) ~imm:0;
@@ -209,11 +258,16 @@ let rec lower_stmt st ~stage ~buf ~(tx_done : (string, unit) Hashtbl.t) ~(tma_in
        | `Lead off -> Sass.uiadd3 b (g + 1) ur_lead off);
       Sass.utmaldg ~two:(two_cta st) b ~g ~map:(ur_param (param_index st src))
     end;
-    Sass.uiadd3 b (g + 2) (g + 2) st.k.tile_k
+    (* the next stage's box starts where this one's K extent ends *)
+    Sass.uiadd3 b (g + 2) (g + 2) (snd (Atom.dims (Hashtbl.find st.layouts dst)))
   | Mma { d = _; a; b = bb } ->
     let b = st.b in
-    let sa = stile st a and sb = stile st bb in
-    let steps = st.k.tile_k / 16 in
+    let da = operand_desc st a and db = operand_desc st bb in
+    (* one MMA consumes 16 of the stage's K columns; the stage's K extent is
+       its layout's *)
+    let k_of name = snd (Atom.dims (Hashtbl.find st.layouts name)) in
+    if k_of a <> k_of bb then failwith "mma: the operands' stages hold different K extents";
+    let steps = k_of a / 16 in
     (* only the very first MMA of the kernel overwrites the accumulator; that
        one reads a flag the loop body sets, every other one accumulates *)
     let kept = st.k.depth <= 4 in
@@ -221,12 +275,12 @@ let rec lower_stmt st ~stage ~buf ~(tx_done : (string, unit) Hashtbl.t) ~(tma_in
     let base_b = base_a + 1 in
     if not kept
     then begin
-      sw128_desc_low st ~ur:base_a ~off:(Hashtbl.find st.smem_dyn a + (stage * st.stage_bytes));
-      sw128_desc_low st ~ur:base_b ~off:(Hashtbl.find st.smem_dyn bb + (stage * st.stage_bytes))
+      desc_low st ~ur:base_a ~off:(Hashtbl.find st.smem_dyn a + (stage * st.stage_bytes));
+      desc_low st ~ur:base_b ~off:(Hashtbl.find st.smem_dyn bb + (stage * st.stage_bytes))
     end;
     for j = 0 to steps - 1 do
-      sw128_descriptor st ~ur:ur_da ~base:base_a ~j;
-      sw128_descriptor st ~ur:ur_db ~base:base_b ~j;
+      Sass.uiadd3 b ur_da base_a (da.kstep * j);
+      Sass.uiadd3 b ur_db base_b (db.kstep * j);
       if st.mma_seen = 0 then begin
         Sass.uisetp_ne b 0 ur_mma_count;
         (if two_cta st
@@ -238,8 +292,7 @@ let rec lower_stmt st ~stage ~buf ~(tx_done : (string, unit) Hashtbl.t) ~(tma_in
       then Sass.utchmma2 b ~guard:up_leader ~a:ur_da ~bb:ur_db ~d:ur_acc ~e:ur_zero ~idesc:ur_idesc ~acc:true
       else Sass.utchmma_acc b ~a:ur_da ~bb:ur_db ~d:ur_acc ~e:ur_zero ~idesc:ur_idesc ~acc:true;
       st.mma_seen <- st.mma_seen + 1
-    done;
-    ignore (sa, sb)
+    done
   | Commit p ->
     (* A stage the whole cluster refills is released to the whole cluster: the
        commit signals that barrier in every CTA the mask selects, and each CTA
@@ -254,168 +307,107 @@ let rec lower_stmt st ~stage ~buf ~(tx_done : (string, unit) Hashtbl.t) ~(tma_in
     then Sass.utcbar_mc st.b ~mbar:(mbar_reg st p ~stage ~buf) ~mask
     else Sass.utcbar st.b ~mbar:(mbar_reg st p ~stage ~buf)
   | Signal p -> release_to_pair st p ~stage ~buf
-  | Store { dst; src = _; release } ->
+  | Store { dst; src; via; release } ->
     let b = st.b in
-    let c = gmat st dst in
-    let tm = st.k.tile_m and tn = st.k.tile_n and ldc = c.cols in
-    (* tensor memory: this warp's 32 lanes *)
-    Sass.lop3_and b r_tmp r_warp 3;
-    Sass.lea_ur b r_tmp2 r_tmp ur_acc 0x15;
-    Sass.r2ur b ur_epi r_tmp2;
-    (* Staging pays for itself only when enough tiles are in flight for the
-       scattered stores to contend; with a handful of CTAs the machine has
-       bandwidth to spare and the extra latency is all cost. *)
-    let staged = st.k.tile_m_count * st.k.tile_n_count >= 64 in
-    (* C address of this thread's row: ((tile_m*tm + 32*w4 + lane)*ldc + tile_n*tn) * 4 *)
-    Sass.imad_rz b r_tmp2 r_tilem (tm * ldc * 4);
-    Sass.lop3_and b r_tmp r_warp 3;
-    Sass.imad b r_tmp2 r_tmp (32 * ldc * 4) r_tmp2;
-    if staged
-    then begin
-      Sass.shf_r b r_lrow r_lane 4;
-      Sass.lop3_and b r_lcol r_lane 15;
-      Sass.imad b r_tmp2 r_lrow (ldc * 4) r_tmp2;
-      Sass.imad b r_tmp2 r_lcol 16 r_tmp2
-    end
-    else Sass.imad b r_tmp2 r_lane (ldc * 4) r_tmp2;
-    Sass.imad b r_tmp2 r_tilen (tn * 4) r_tmp2;
-    Sass.iadd3_ur b r_caddr ~carry:0 r_tmp2 (ur_param (param_index st dst));
-    Sass.imad_x_ur b (r_caddr + 1) (ur_param (param_index st dst) + 1) 0;
-    (* Tensor memory hands a lane a whole row, so storing straight to global
-       makes every lane of a warp touch a different cache line. The rows go
-       through shared memory first and come back transposed, so a warp's store
-       covers one contiguous run. Measured: this is a quarter of the runtime. *)
-    (* Route two, shaped after CUTLASS's epilogue: read the accumulator in
-       fragments, scatter them into a swizzled shared block, and let the copy
-       engine write that block out. Two blocks per warp so a store overlaps the
-       next fragment's staging. *)
-    (* the accumulator goes back through shared memory either way; letting the
-       copy engine read it out beats a warp doing the stores itself, and it is
-       the only route that reaches the width the tensor pipe feeds at *)
-    let tma_store = Sys.getenv_opt "WARPC_STAGED_EPILOGUE" = None in
-    let chunks = if tma_store then tn / 32 else tn / 64 in
-    let row_bytes = if tma_store then 32 * 4 else 64 * 4 in
-    let pitch = if tma_store then row_bytes else row_bytes + 16 in
-    let warp_stage = 32 * pitch in
-    let epi_base = st.epi_off in
-    (* this warp's staging area, the row this lane writes, and the 16 bytes of
-       every row it reads back *)
-    if staged then begin
-    Sass.lop3_and b r_tmp r_warp 3;
-    Sass.r2ur b ur_wid r_tmp;
-    Sass.imad_rz b r_tmp r_tmp (if tma_store then 2 * warp_stage else warp_stage);
-    Sass.imad b r_stage r_lane pitch r_tmp;
-    Sass.lea_ur b r_stage r_stage ur_smem 0;
-    Sass.iadd3_c b r_stage r_stage epi_base;
-    (* A staged row holds 64 floats, which sixteen lanes cover with 16 bytes
-       each, so the warp reads two rows at a time: the high half of the lane
-       index picks the row, the low half the piece of it. *)
-    Sass.shf_r b r_lrow r_lane 4;
-    Sass.lop3_and b r_lcol r_lane 15;
-    Sass.imad b r_stage2 r_lrow pitch r_tmp;
-    Sass.imad b r_stage2 r_lcol 16 r_stage2;
-    Sass.lea_ur b r_stage2 r_stage2 ur_smem 0;
-    Sass.iadd3_c b r_stage2 r_stage2 epi_base;
-    (* the rows a lane stores are a fixed stride apart and the stride is far
-       past a store's offset field, so their addresses are built once here
-       rather than walked inside every chunk *)
-    if tma_store then begin
-      (* piece p of a row sits at (p xor (row mod 8)) so the warp's writes land
-         in different banks and the copy engine still sees its own layout *)
-      Sass.lop3_and b r_tmp2 r_lane 7;
-      for q = 0 to 7 do
-        Sass.lop3_xor_imm_r b (r_swz + q) r_tmp2 q;
-        Sass.imad b (r_swz + q) (r_swz + q) 16 r_stage
-      done;
-      st.max_reg <- max st.max_reg (r_swz + 7)
-    end;
-    Sass.mov_rr b r_rows r_caddr;
-    Sass.mov_rr b (r_rows + 1) (r_caddr + 1);
-    for pair = 1 to 15 do
-      Sass.iadd3_imm b (r_rows + (2 * pair)) ~carry:0 (r_rows + (2 * pair) - 2) (2 * ldc * 4);
-      Sass.imad_x_r b (r_rows + (2 * pair) + 1) (r_rows + (2 * pair) - 1) 0
-    done;
-    st.max_reg <- max st.max_reg (r_rows + 31)
-    end;
-    (* With two register buffers the whole accumulator can be read out before
-       anything is written, which lets the tensor core have it back while this
-       warp is still storing. *)
-    (* Releasing the accumulator before the values are written lets the tensor
-       core start the next tile while this warp stores. Measured: no gain, the
-       stores are bandwidth-bound and overlapping does not make them cheaper,
-       and holding both buffers plus a read-back scratch costs every register
-       the thread has. Kept behind a flag. *)
-    let early = release <> None && chunks <= 2 && Sys.getenv_opt "WARPC_EARLY_RELEASE" <> None in
-    if early then begin
-      for ch = 0 to chunks - 1 do
-        let d = r_data.(ch mod 2) in
-        Sass.ldtm_off b d ~n:(if tma_store then 32 else 64) ~addr:ur_epi ~imm:((if tma_store then 32 else 64) * ch);
-        st.max_reg <- max st.max_reg (d + 63)
-      done;
-      match release with
-      | Some p -> release_to_pair st p ~stage:0 ~buf
-      | None -> ()
-    end;
-    for ch = 0 to chunks - 1 do
-      let d = r_data.(ch mod 2) in
-      if not early then begin
-        Sass.ldtm_off b d ~n:(if tma_store then 32 else 64) ~addr:ur_epi ~imm:((if tma_store then 32 else 64) * ch);
-        st.max_reg <- max st.max_reg (d + 63)
-      end;
-      if tma_store
-      then begin
-        (* the block this fragment goes to, alternating so the previous store
-           can still be reading the other one *)
-        let blk = (ch mod 2) * warp_stage in
-        for q = 0 to 7 do
-          Sass.sts_r b ~width:128 ~r:(r_swz + q) ~imm:blk ~data:(d + (4 * q))
-        done;
-        (* The copy engine reads the staging block, so the writes into it must
-           have landed, not merely issued: a read scoreboard only says the
-           store has taken its data out of the registers.  The fence publishes
-           them to the async proxy and the wait has to come after it -- waiting
-           first leaves the youngest stores unpublished and the engine reads
-           the sixteen bytes they were about to overwrite. *)
-        Sass.fence_view_async b;
-        Sass.warpsync b;
-        Sass.uiadd3 b ur_st ur_smem (epi_base + blk);
-        Sass.ulea b ur_st ur_wid ur_st (log2 (2 * warp_stage));
-        (* the store group is the block, then the two coordinates *)
-        Sass.uiadd3 b (ur_st + 1) ur_tile_n (32 * ch);
-        Sass.ulea b (ur_st + 2) ur_wid ur_tile_m 5;
-        Sass.utmastg b ~g:ur_st ~map:(ur_param (param_index st dst));
-        Sass.utmacmdflush b;
-        Sass.depbar_drain b;
-        Sass.warpsync b
-      end
-      else if not staged
-      then
-        for q = 0 to 15 do
-          Sass.stg128 b ~base:r_caddr ~imm:((64 * ch * 4) + (16 * q)) ~data:(d + (4 * q))
+    let acc = ttile st src and sc = stile st via in
+    let box = Hashtbl.find st.layouts via in
+    let copies =
+      match sc.ring with Per_warp n -> n | Stages -> failwith (via ^ ": a staging tile has copies per warp")
+    in
+    let copy = Hashtbl.find st.copy_bytes via in
+    let n = sc.scols and elem = elem_bytes sc.sdtype in
+    if sc.srows <> Atom.ldtm_block then failwith (via ^ ": a warp's block has the 32 rows of its lane quarter");
+    let blocks_m = acc.trows / Atom.ldtm_block and blocks_n = acc.tcols / n in
+    (* The tensor-memory load's fragment, dealt over the accumulator's blocks
+       and composed with the accumulator's layout, is the load's address map;
+       Atom checks it against what one warp-uniform address reads. *)
+    let frag = Atom.ldtm_32x32b ~n in
+    let block = Shape.Product [ Bound Atom.ldtm_block; Bound n ] in
+    let grid = Linear.canonical (Product [ Bound blocks_m; Bound blocks_n ]) in
+    let ld =
+      Layout.compose
+        (Layout.interleave ~by:grid frag)
+        (Layout.divide ~by:block (Atom.tmem_accumulator ~rows:acc.trows ~cols:acc.tcols))
+    in
+    Atom.check_ldtm ld ~blocks_m ~blocks_n ~n;
+    let rt = Shape.Bound blocks_m in
+    let w_of = function Coord.Idx w -> w | Tuple _ -> assert false in
+    let e_ld, imm_ld =
+      split ~name:"tensor-memory load" ~rt ~n:blocks_n (fun c ch ->
+        Layout.offset ld (Coord.Tuple [ Tuple [ Idx (w_of c); Idx ch ]; Tuple [ Idx 0; Idx 0 ] ]))
+    in
+    (* The staging write is the same fragment composed with the staging tile's
+       layout -- the box the copy engine reads -- so a register's address is
+       where the store will look for it. *)
+    let sts = Layout.compose frag box in
+    if not (Layout.is_injective sts) then failwith (via ^ ": two values of a fragment land on one address");
+    let vec = 16 / elem in
+    for l = 0 to Atom.ldtm_block - 1 do
+      for q = 0 to (n / vec) - 1 do
+        let a e = Layout.offset sts (Coord.Tuple [ Idx l; Idx ((vec * q) + e) ]) in
+        if a 0 mod 16 <> 0 then failwith "store: a register vector is not 16-byte aligned";
+        for e = 1 to vec - 1 do
+          if a e <> a 0 + (e * elem) then failwith "store: a register vector is not contiguous"
         done
-      else begin
-      for q = 0 to 15 do
-        Sass.sts_r b ~width:128 ~r:r_stage ~imm:(16 * q) ~data:(d + (4 * q))
-      done;
-      Sass.warpsync b;
-      (* every read is independent, so they all go out before the first store
-         waits on one: interleaving them leaves a single load in flight *)
-      (* when both buffers hold accumulator values the read-back needs its own
-         registers, not the other buffer *)
-      let t = if early then r_back else r_data.((ch + 1) mod 2) in
-      st.max_reg <- max st.max_reg (t + 63);
-      for pair = 0 to 15 do
-        Sass.lds_r b ~width:128 (t + (4 * pair)) ~r:r_stage2 ~imm:(2 * pair * pitch)
-      done;
-      for pair = 0 to 15 do
-        Sass.stg128 b ~base:(r_rows + (2 * pair)) ~imm:(64 * ch * 4) ~data:(t + (4 * pair))
-      done;
-      Sass.warpsync b
-      end
+      done
     done;
-    if not early then (match release with
-      | Some p -> release_to_pair st p ~stage:0 ~buf
-      | None -> ())
+    (* A block's place in the output is its place in the tile's division into
+       blocks; the copy engine takes it as a coordinate pair. *)
+    let tile : (Space.logical, Space.logical) Layout.t =
+      Layout.divide ~by:block (Layout.of_linear (Linear.canonical (Product [ Bound acc.trows; Bound acc.tcols ])))
+    in
+    let origin c ch = Layout.offset tile (Coord.Tuple [ Tuple [ Idx 0; Idx 0 ]; Tuple [ Idx (w_of c); Idx ch ] ]) in
+    let e_y, imm_y = split ~name:"store row" ~rt ~n:blocks_n (fun c ch -> origin c ch / acc.tcols) in
+    let e_x, imm_x = split ~name:"store column" ~rt ~n:blocks_n (fun c ch -> origin c ch mod acc.tcols) in
+    let x0 = match e_x with Expr.Const k -> k | _ -> failwith "store: a block's column depends on the warp" in
+    (* the warp's copies of the staging tile: the copies of the block row it
+       reads *)
+    let e_copy = Expr.scale (copies * copy) (Expr.var "c") in
+    (* The runtime coordinate of all of these is the block row, which the load
+       fixes to the warp's lane quarter. *)
+    let quarter e = Expr.bind "c" (Expr.modulo (Expr.var "warpid") 4) e in
+    let em = Emit.create b ~scratch in
+    let range = hw_range st and reg = hw_reg in
+    Emit.into em ~range ~reg (quarter e_ld) ~dst:r_tmp2;
+    Sass.lea_ur b r_tmp2 r_tmp2 ur_acc 0;
+    Sass.r2ur b ur_epi r_tmp2;
+    Emit.into em ~range ~reg (quarter e_copy) ~dst:r_stage;
+    Sass.lea_ur b r_stage r_stage ur_smem 0;
+    Sass.iadd3_c b r_stage r_stage st.epi_off;
+    Sass.r2ur b ur_esrc r_stage;
+    Emit.into em ~range ~reg (quarter e_y) ~dst:r_tmp;
+    Sass.lea_ur b r_tmp r_tmp ur_tile_m 0;
+    Sass.r2ur b ur_ey r_tmp;
+    for q = 0 to (n / vec) - 1 do
+      let e = Restricted.expr (Restricted.restrict ~at:(Parts [ Free; At (vec * q) ]) sts) in
+      Emit.into em ~range ~reg (Expr.bind "c0" (Expr.var "laneid") e) ~dst:(r_swz + q);
+      Sass.iadd3 b (r_swz + q) (r_swz + q) r_stage
+    done;
+    st.max_reg <- max st.max_reg (max em.high (r_swz + (n / vec) - 1));
+    for ch = 0 to blocks_n - 1 do
+      let d = r_data.(ch mod 2) and slot = ch mod copies in
+      Sass.ldtm_off b d ~n ~addr:ur_epi ~imm:imm_ld.(ch);
+      st.max_reg <- max st.max_reg (d + n - 1);
+      for q = 0 to (n / vec) - 1 do
+        Sass.sts_r b ~width:(8 * vec * elem) ~r:(r_swz + q) ~imm:(slot * copy) ~data:(d + (vec * q))
+      done;
+      (* The copy engine reads the staging copy, so the writes into it must
+         have landed, not merely issued: a read scoreboard only says the store
+         has taken its data out of the registers. The fence publishes them to
+         the async proxy and the wait comes after it -- waiting first leaves
+         the youngest stores unpublished and the engine reads the sixteen bytes
+         they were about to overwrite. *)
+      Sass.fence_view_async b;
+      Sass.warpsync b;
+      Sass.uiadd3 b ur_st ur_esrc (slot * copy);
+      Sass.uiadd3 b (ur_st + 1) ur_tile_n (x0 + imm_x.(ch));
+      Sass.uiadd3 b (ur_st + 2) ur_ey imm_y.(ch);
+      Sass.utmastg b ~g:ur_st ~map:(ur_param (param_index st dst));
+      Sass.utmacmdflush b;
+      Sass.depbar_drain b;
+      Sass.warpsync b
+    done;
+    (match release with Some p -> release_to_pair st p ~stage:0 ~buf | None -> ())
   | Kloop body ->
     ignore buf;
     let b = st.b in
@@ -438,26 +430,32 @@ let rec lower_stmt st ~stage ~buf ~(tx_done : (string, unit) Hashtbl.t) ~(tma_in
     (match tmas with
      | [] -> ()
      | _ ->
-       let tx = List.fold_left (fun acc (dst, _) -> acc + stage_bytes_of (stile st dst)) 0 tmas in
-       (* measured: a .2CTA load still carries only the box this CTA asked for
-          and reports it to this CTA's barrier, so the count is its own stage *)
+       (* the bytes the loads deliver: each box's image. A .2CTA load still
+          carries only the box this CTA asked for and reports it to this
+          CTA's barrier (measured), so the count is this CTA's stage. *)
+       let tx =
+         List.fold_left
+           (fun acc (dst, _) -> acc + footprint (Hashtbl.find st.layouts dst) ~elem:(elem_bytes (stile st dst).sdtype))
+           0 tmas
+       in
        Sass.mov_imm b r_tmp2 tx);
     (match List.find_opt (function Mma _ -> true | _ -> false) body with
      | None -> ()
      | Some (Mma { a; b = bb; _ }) ->
        Sass.umov b ur_mma_count 0;
        Sass.umov b ur_zero 0;
-       let dm = match Sys.getenv_opt "WARPC_IDESC_M" with Some v -> int_of_string v | None -> if two_cta st then 2 else 1 in
-       let dn = match Sys.getenv_opt "WARPC_IDESC_N" with Some v -> int_of_string v | None -> 1 in
-       let m_rows = st.k.tile_m * dm and n_cols = st.k.tile_n * dn in
+       (* the instruction descriptor states the MMA's shape: M rows over
+          the pair for a two-CTA MMA, N the accumulator's columns *)
+       let acc = List.hd st.k.tmem in
+       let m_rows = acc.trows * (if two_cta st then 2 else 1) and n_cols = acc.tcols in
        Sass.umov b ur_idesc ((1 lsl 4) lor ((n_cols lsr 3) lsl 17) lor ((m_rows lsr 4) lsl 24));
-       Sass.umov b (ur_da + 1) desc_high;
-       Sass.umov b (ur_db + 1) desc_high;
+       Sass.umov b (ur_da + 1) (Atom.desc_high (operand_desc st a));
+       Sass.umov b (ur_db + 1) (Atom.desc_high (operand_desc st bb));
        if s <= 4
        then
          for stage = 0 to s - 1 do
-           sw128_desc_low st ~ur:(ur_dbase_block + (2 * stage)) ~off:(Hashtbl.find st.smem_dyn a + (stage * st.stage_bytes));
-           sw128_desc_low st ~ur:(ur_dbase_block + (2 * stage) + 1) ~off:(Hashtbl.find st.smem_dyn bb + (stage * st.stage_bytes))
+           desc_low st ~ur:(ur_dbase_block + (2 * stage)) ~off:(Hashtbl.find st.smem_dyn a + (stage * st.stage_bytes));
+           desc_low st ~ur:(ur_dbase_block + (2 * stage) + 1) ~off:(Hashtbl.find st.smem_dyn bb + (stage * st.stage_bytes))
          done
      | Some _ -> assert false);
     if rounds > 1 then Sass.mov_rz b r_cnt;
@@ -521,24 +519,65 @@ let lower (k : kernel) : string list =
   (* offsets below are relative to the smem base register, which sits at window
      offset 0x400; the dynamic region begins right after the static bytes *)
   let dyn_base = static_bytes in
-  (* stages: all tiles of one stage contiguous, 1024-aligned each *)
+  (* Each shared tile's layout is fixed by the instruction that reads it. A
+     copy takes its image's footprint, rounded up to the swizzle's period so
+     that every copy starts where the pattern starts; the window offset of the
+     dynamic region is itself a multiple of the period. *)
+  if (0x400 + dyn_base) mod Atom.sw128_period <> 0 then failwith "the dynamic region is not swizzle-aligned";
+  let layouts = Hashtbl.create 4 and copy_bytes = Hashtbl.create 4 in
+  List.iter
+    (fun (t : stile) ->
+      let l = tile_layout k t in
+      Hashtbl.replace layouts t.sname l;
+      Hashtbl.replace copy_bytes t.sname (round_up (footprint l ~elem:(elem_bytes t.sdtype)) Atom.sw128_period))
+    k.smem;
+  (* the ring: one stage holds a copy of every stage tile, stages back to back *)
   let smem_dyn = Hashtbl.create 2 in
   let off = ref 0 in
-  List.iter (fun (s : stile) -> Hashtbl.replace smem_dyn s.sname (dyn_base + !off); off := !off + round_up (stage_bytes_of s) 1024) k.smem;
+  List.iter
+    (fun (t : stile) ->
+      if t.ring = Stages then begin
+        Hashtbl.replace smem_dyn t.sname (dyn_base + !off);
+        off := !off + Hashtbl.find copy_bytes t.sname
+      end)
+    k.smem;
   let stage_bytes = !off in
-  (* the staging area exists only for the route that uses it *)
+  (* after the ring, the staging tile: its copies for each warp that writes it *)
+  let writers name =
+    List.fold_left
+      (fun acc s ->
+        match s with
+        | Role (ws, body) when reads (function Store { via; _ } -> via = name | _ -> false) body -> acc + List.length ws
+        | _ -> acc)
+      0 k.body
+  in
   let epi_bytes =
-    if Sys.getenv_opt "WARPC_STAGED_EPILOGUE" = None
-    then 4 * 2 * 32 * (32 * 4) (* two blocks per warp, 32 rows of 128 bytes *)
-    else if k.tile_m_count * k.tile_n_count >= 64
-    then 4 * 32 * ((64 * 4) + 16)
-    else 0
+    List.fold_left
+      (fun acc (t : stile) ->
+        match t.ring with
+        | Stages -> acc
+        | Per_warp n ->
+          if acc > 0 then failwith "one staging tile per kernel";
+          writers t.sname * n * Hashtbl.find copy_bytes t.sname)
+      0 k.smem
   in
   let dyn_bytes = (stage_bytes * k.depth) + epi_bytes in
   let acc_cols = (List.hd k.tmem).tcols in
   let ncols = acc_cols * nbuf in
   if not (pow2 ncols && ncols >= 32 && ncols <= 512) then failwith "tmem columns";
-  let st = { b; k; pipe_slot; pipe_index; smem_dyn; stage_bytes; slot_off; labels = 0; max_reg = r_data.(1) + 63; mma_seen = 0; smem_base = ur_smem; epi_off = dyn_base + (stage_bytes * k.depth) } in
+  let st =
+    { b; k; pipe_slot; pipe_index; smem_dyn; stage_bytes; slot_off; labels = 0; max_reg = r_data.(1) + 63; mma_seen = 0
+    ; smem_base = ur_smem; epi_off = dyn_base + (stage_bytes * k.depth); layouts; copy_bytes }
+  in
+  (* a store's warps read tensor memory through their lane quarters, so they
+     must hold each quarter exactly once *)
+  List.iter
+    (function
+      | Role (ws, body) when reads (function Store _ -> true | _ -> false) body ->
+        if List.sort compare (List.map (fun w -> w mod 4) ws) <> [ 0; 1; 2; 3 ]
+        then failwith "store: the warps must be one of each lane quarter"
+      | _ -> ())
+    k.body;
   let alloc_warp = 1 in
   (* prologue *)
   Sass.ldc b 1 0x37c;
@@ -548,55 +587,49 @@ let lower (k : kernel) : string list =
   Sass.s2ur_cta b ur_cta;
   Sass.umov b ur_tmp 0x400;
   Sass.ulea b ur_smem ur_cta ur_tmp 0x18;
-  (* The tile this CTA owns. The grid is one dimensional and the map from a
-     CTA index to a tile is a layout: the index splits into digits (position
-     within a group of rows, column, group), and the digits are shifts and
-     masks. Consecutive CTAs walk down [group] rows before moving across, so
-     the tiles running at any moment form a compact block and their operand
-     rows stay in L2. *)
+  (* The tile a CTA owns. The map from a CTA index to a tile is a layout: the
+     index's digits -- the CTA's rank in its cluster, its place in a group of
+     rows, the column, the group -- name the tile, so consecutive CTAs walk
+     down [group] rows before moving across and the tiles in flight share
+     their operand rows in L2. What is emitted is the decided strided form of
+     the map from the index to each coordinate of the tile's origin. *)
   let tiles_m = k.tile_m_count / k.cluster and tiles_n = k.tile_n_count / k.cluster_n in
-  let group = if pow2 tiles_n then min tiles_m (min 8 (let rec g n = if n * 2 <= tiles_m && n < 8 then g (n * 2) else n in g 1)) else 1 in
-  let rasterize = pow2 tiles_n && pow2 group && tiles_m mod group = 0 in
+  let group =
+    let rec g n = if n * 2 <= tiles_m && n < 8 then g (n * 2) else n in
+    let g = g 1 in
+    if pow2 tiles_n && tiles_m mod g = 0 then g else 1
+  in
+  let width = tiles_n * k.cluster_n in
+  let cta_grid : (Space.thread_value, Space.logical) Layout.t =
+    Layout.of_linear
+      (Group
+         [ Axis { size = tiles_m / group; stride = group * k.cluster * width }
+         ; Axis { size = tiles_n; stride = k.cluster_n }
+         ; Axis { size = group; stride = k.cluster * width }
+         ; Axis { size = k.cluster_n; stride = 1 }
+         ; Axis { size = k.cluster; stride = width }
+         ])
+  in
+  let ntiles = k.tile_m_count * k.tile_n_count in
+  if not (Layout.is_bijection_onto cta_grid ~size:ntiles) then failwith "the CTA-to-tile map misses a tile";
+  let tile_of t = Layout.offset cta_grid (Coord.unflatten (Layout.shape cta_grid) t) in
+  let origin name f =
+    match Decide.strided_form ~shape:(Bound ntiles) ~offset:(function Coord.Idx t -> f (tile_of t) | Tuple _ -> assert false) with
+    | Some e -> e
+    | None -> failwith (name ^ ": the CTA-to-tile map has no strided form")
+  in
+  let e_row = origin "tile row" (fun i -> i / width * k.tile_m)
+  and e_col = origin "tile column" (fun i -> i mod width * k.tile_n) in
   Sass.s2r_ctaid b r_tile ~axis:"X";
-  ignore rasterize;
   let tile_indices () =
-    if grid_cluster k then Sass.shf_r b r_tmp r_tile (log2 (ctas k)) else Sass.imad_rz b r_tmp r_tile 1;
-    if rasterize && (group > 1 || tiles_n > 1)
-    then begin
-    Sass.lop3_and b r_tilem r_tmp (group - 1);
-    Sass.shf_r b r_tmp2 r_tmp (log2 group);
-    Sass.lop3_and b r_tilen r_tmp2 (tiles_n - 1);
-    Sass.shf_r b r_tmp2 r_tmp (log2 group + log2 tiles_n);
-    Sass.imad b r_tilem r_tmp2 group r_tilem
-  end
-    else if pow2 tiles_n
-    then begin
-      Sass.lop3_and b r_tilen r_tmp (tiles_n - 1);
-      Sass.shf_r b r_tilem r_tmp (log2 tiles_n)
-    end
-    else begin
-      (* a column count that is not a power of two still splits the tile index
-         exactly: the count is known here, so the reciprocal is chosen and
-         checked over the whole range the kernel can see *)
-      let m, sh = exact_recip tiles_n (tiles_m * tiles_n) in
-      Sass.imad_rz b r_tilem r_tmp m;
-      Sass.shf_r b r_tilem r_tilem sh;
-      Sass.imad b r_tilen r_tilem (-tiles_n land 0xffffffff) r_tmp
-    end;
+    let em = Emit.create b ~scratch in
+    let range = function "c" -> ntiles | v -> failwith v
+    and reg = function "c" -> r_tile | v -> failwith v in
+    Emit.into em ~range ~reg e_row ~dst:r_tilem;
+    Emit.into em ~range ~reg e_col ~dst:r_tilen;
+    st.max_reg <- max st.max_reg em.high;
     Sass.r2ur b ur_tile_n r_tilen;
-    Sass.r2ur b ur_tile_m r_tilem;
-    if grid_cluster k
-    then begin
-      (* the index decomposed above is the CLUSTER's tile; the rank names the
-         tile inside it, x down the rows and y across the columns *)
-      Sass.ushf_l b ur_tile_m ur_tile_m (log2 k.cluster);
-      Sass.ulop3_and b ur_tmp ur_cta (k.cluster - 1);
-      Sass.uiadd3_uu b ur_tile_m ur_tile_m ur_tmp;
-      Sass.ushf_l b ur_tile_n ur_tile_n (log2 k.cluster_n);
-      Sass.uiadd3_uu b ur_tile_n ur_tile_n ur_rank_y
-    end;
-    Sass.ushf_l b ur_tile_n ur_tile_n (log2 k.tile_n);
-    Sass.ushf_l b ur_tile_m ur_tile_m (log2 k.tile_m)
+    Sass.r2ur b ur_tile_m r_tilem
   in
   Sass.shf_r b r_warp r_tid 5;
   Sass.lop3_and b r_lane r_tid 31;
@@ -653,18 +686,10 @@ let lower (k : kernel) : string list =
   in
   (* the grid counts CTAs, and a cluster holds one tile per CTA *)
   let total_tiles = tiles_m * tiles_n * ctas k in
-  let grid =
-    match Sys.getenv_opt "WARPC_GRID" with
-    | Some g -> min total_tiles (int_of_string g)
-    (* With a cluster, the CTAs of a cluster must stay on the same tile: a
-       multicast writes into the partner's stage, so a partner that has moved
-       on to another tile would receive the wrong rows. One tile per CTA keeps
-       them together; persistence needs a cluster-wide barrier per tile. *)
-    (* A clustered kernel is not persistent: the CTAs of a cluster multicast
-       into each other's stages, so they must stay on the same tile, and one
-       tile per CTA is what keeps them together. *)
-    | None -> if grid_cluster k || total_tiles <= 148 then total_tiles else 148
-  in
+  (* A clustered kernel is not persistent: the CTAs of a cluster multicast
+     into each other's stages, so they must stay on the same tile, and one tile
+     per CTA is what keeps them together. *)
+  let grid = if grid_cluster k || total_tiles <= 148 then total_tiles else 148 in
   let persistent = grid < total_tiles in
   Sass.isetp_ne_u32 b p_role r_warp alloc_warp;
   Sass.bra b p_role "INIT_DONE";
@@ -765,20 +790,44 @@ let lower (k : kernel) : string list =
     k.body;
   Sass.exit b;
   let nregs = round_up (st.max_reg + 1 + 2) 8 in
+  (* Every tensor map the kernel takes, as the host must encode it: the box is
+     read off the layout of the shared tile the matrix moves through, so the
+     host cannot disagree with the addresses the kernel computes. *)
+  let tmaps =
+    List.filter_map
+      (fun (g : gmat) ->
+        if g.via <> Tmap
+        then None
+        else (
+          let tiles =
+            List.sort_uniq compare
+              (let rec walk acc = function
+                 | Tma { src; dst; _ } when src = g.name -> dst :: acc
+                 | Store { dst; via; _ } when dst = g.name -> via :: acc
+                 | Kloop body | Role (_, body) -> List.fold_left walk acc body
+                 | _ -> acc
+               in
+               List.fold_left walk [] k.body)
+          in
+          match tiles with
+          | [ t ] ->
+            let bx = Atom.tma_box (Hashtbl.find layouts t) ~elem:(elem_bytes g.dtype) in
+            Some
+              (Printf.sprintf ".tmap %s %d %d %d %d %d %d" g.name g.rows g.cols bx.box_elem bx.box_rows bx.box_cols
+                 bx.box_swizzle)
+          | [] -> failwith (g.name ^ ": a tensor-map parameter no copy moves")
+          | _ -> failwith (g.name ^ ": moved through tiles with different layouts")))
+      k.params
+  in
   let header =
     List.map (fun l -> "# " ^ l) (String.split_on_char '\n' (Dsl2.to_string k))
     @ [ ".kernel " ^ k.name; ".sm sm_100a"; Printf.sprintf ".regs %d" nregs
       ; ".barriers 2"
       ; Printf.sprintf ".threads %d" nthreads; Printf.sprintf ".smem %d" static_bytes; Printf.sprintf ".dynsmem %d" dyn_bytes
       ; Printf.sprintf ".tile %d %d %d" k.tile_m k.tile_n k.tile_k
-        (* the operand boxes a tensor map must describe: they are the shared
-           tiles, which a two-CTA MMA makes narrower than the output tile *)
-      ; Printf.sprintf ".box %d %d"
-          (match List.find_opt (fun (t : stile) -> t.sname = "sa") k.smem with Some t -> t.srows | None -> k.tile_m)
-          (match List.find_opt (fun (t : stile) -> t.sname = "sb") k.smem with Some t -> t.srows | None -> k.tile_n)
-      ; Printf.sprintf ".grid %d 1" grid; Printf.sprintf ".mbarriers %d" !nslots
+      ] @ tmaps @ [
+      Printf.sprintf ".grid %d 1" grid; Printf.sprintf ".mbarriers %d" !nslots
       ; Printf.sprintf ".cluster %d" (ctas k)
-      ; (if Sys.getenv_opt "WARPC_STAGED_EPILOGUE" = None then ".cstore tma" else ".cstore direct")
       ; ".tcgen05"
       ; ".params " ^ String.concat " " (List.map (fun _ -> "8") k.params) ]
   in

@@ -7,7 +7,8 @@ Header directives:  .kernel NAME  .sm sm_100a  .regs N  .barriers N  .params 8 8
 Lines:  LABEL:   or   INSTRUCTION {stall= yield= writebar= readbar= waitbar=}
 """
 import sys, re, struct, os
-sys.path.insert(0, '/home/nan/cupatch-new/cupatch-master')
+# cupatch is the encoder; CUPATCH names its checkout
+sys.path.insert(0, os.environ.get('CUPATCH', os.path.expanduser('~/cupatch-new/cupatch-master')))
 from cupatch.obj import builder as B
 from cupatch.obj.builder import KernelBuilder
 from cupatch.obj.elf import SectionSpec, SHT_NOBITS, SHF_WRITE, SHF_ALLOC, SHF_INFO_LINK
@@ -56,6 +57,10 @@ def assemble(path):
                 hdr[key] = int(rest, 0)
             elif key == 'tcgen05':
                 hdr['tcgen05'] = True
+            elif key == 'tmap':
+                # one per tensor-map parameter, in parameter order:
+                # name rows cols elem_bytes box_rows box_cols swizzle_bytes
+                hdr.setdefault('tmap', []).append(rest.split())
             else:
                 hdr[key] = rest.strip()
             continue

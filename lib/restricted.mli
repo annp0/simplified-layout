@@ -39,5 +39,8 @@ val offset : (_, _) t -> Coord.t -> int
 
 (** The generated per-lane expression: [strided_form] when there is one,
     otherwise the layout's pipeline with the pinned variables replaced
-    by their constants. *)
+    by their constants. The free variables are named by tree path in
+    the unrestricted domain, as [Layout.expr] names them. *)
+val expr : (_, _) t -> Expr.t
+
 val to_expr : (_, _) t -> string
