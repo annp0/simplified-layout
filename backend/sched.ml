@@ -95,6 +95,7 @@ let schedule (items : item list) : string list =
             else 7, 7
           in
           let rb = match ins.force_rb with Some r -> r | None -> rb in
+          let wb = match ins.force_wb with Some w when wb <> 7 -> w | _ -> wb in
           prev_var := scoreboarded;
           List.iter
             (fun r ->

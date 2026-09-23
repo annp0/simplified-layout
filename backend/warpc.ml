@@ -37,5 +37,7 @@ let () =
   | [ _; "pmma"; m; n; k; d ] ->
     List.iter print_endline (Lower2.lower (Dsl2.mma_probe ~m:(int m) ~n:(int n) ~k:(int k) ~depth:(int d)))
   | [ _; "pepi"; m; n; k ] -> List.iter print_endline (Lower2.lower (Dsl2.epi_probe ~m:(int m) ~n:(int n) ~k:(int k)))
+  | [ _; "talloc"; n ] -> List.iter print_endline (Lower2.tmem_probe ~ncols:(int n) ~times:1)
+  | [ _; "talloc"; n; t ] -> List.iter print_endline (Lower2.tmem_probe ~ncols:(int n) ~times:(int t))
   | [ _; "umma"; m; n; k ] -> List.iter print_endline (Lower.lower (Dsl.gemm ~m:(int m) ~n:(int n) ~k:(int k)))
   | _ -> usage ()

@@ -33,6 +33,7 @@ type insn =
   ; min_stall : int (* cycles before the next issue, for instructions whose effect is deferred *)
   ; drain : bool (* waits for every store issued so far to have read its data: fences and barriers *)
   ; force_rb : int option (* a read scoreboard named by a later wait, so it cannot float *)
+  ; force_wb : int option (* a write scoreboard named by an earlier wait, likewise *)
   }
 
 type item =
@@ -47,8 +48,8 @@ let items b = List.rev b.items
 let label b l = push b (Label l)
 
 let mk ?(guard = "") ?(defs = []) ?(uses = []) ?(late = []) ?(lat = Fixed 6) ?(hold = 0)
-    ?(pipe = "alu") ?(branch = `No) ?(min_stall = 0) ?(drain = false) ?force_rb text =
-  { text; guard; defs; uses; late_uses = late; lat; src_hold = hold; pipe; branch; min_stall; drain; force_rb }
+    ?(pipe = "alu") ?(branch = `No) ?(min_stall = 0) ?(drain = false) ?force_rb ?force_wb text =
+  { text; guard; defs; uses; late_uses = late; lat; src_hold = hold; pipe; branch; min_stall; drain; force_rb; force_wb }
 
 let regs r n = List.init n (fun i -> R (r + i))
 let urs u n = List.init n (fun i -> UR (u + i))
@@ -215,8 +216,10 @@ let depbar_sb0 b = push b (I (mk ~lat:alu ~min_stall:4 "DEPBAR.LE SB0, 0x36"))
 (* [two] asks the allocator for the CTA PAIR, which is what makes a two-CTA
    MMA work: both CTAs get the same tensor-memory columns, and the accumulator
    the instruction writes half into each lands at one address. *)
+(* the allocator's answer is tracked on scoreboard 0, the one the DEPBAR before
+   it names -- ptxas pairs the two the same way *)
 let utcatomsws_fas ?(two = false) b u =
-  push b (I (mk ~defs:[ UP 0; UR u ] ~late:[ UR u ] ~lat:Variable
+  push b (I (mk ~defs:[ UP 0; UR u ] ~late:[ UR u ] ~lat:Variable ~force_wb:0
                (pf "UTCATOMSWS%s.FIND_AND_SET.ALIGN UP0, UR%d, UR%d" (if two then ".2CTA" else "") u u)))
 
 let plop3_up b p ~up =

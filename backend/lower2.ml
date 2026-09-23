@@ -31,7 +31,7 @@ let p_role = 1 and p_lane0 = 2 and p_loop = 3 and p_lead = 4
 
 (* uniform registers *)
 let ur_desc = 4 and ur_param i = 8 + (2 * i)
-let ur_cta = 14 and ur_tmp = 15 and ur_smem = 16 and ur_tmem = 17 and ur_tile_n = 18 and ur_tile_m = 19
+let ur_cta = 14 and ur_tmp = 15 and ur_smem = 16 and ur_tile_n = 18 and ur_tile_m = 19
 let ur_init = 20 and ur_mma_count = 22 and ur_acc = 24
 let ur_mask = 6 (* the cluster's CTA mask, for multicast loads *)
 (* A two-dimensional cluster gives each operand its own group. The CTAs that
@@ -484,11 +484,12 @@ let rec lower_stmt st ~stage ~buf ~(tx_done : (string, unit) Hashtbl.t) ~(tma_in
     done
   | Role _ -> failwith "nested role"
 
-let dealloc st =
-  let b = st.b in
-  let ncols = (List.hd st.k.tmem).tcols * (List.hd st.k.tmem).bufs in
+(* Free [ncols] tensor-memory columns allocated at address [base]: clear
+   their 32-column chunks and the allocation's start bit, 16 above its first
+   chunk -- the mask ptxas builds (ref/talloc512.ptx). *)
+let free_tmem b ~base ~ncols =
   let u = ur_init in
-  Sass.ulop3_and b u ur_tmem 0xffff;
+  Sass.ulop3_and b u base 0xffff;
   Sass.ushf_r b u u 5;
   Sass.umov b (u + 1) ((1 lsl (ncols / 32)) - 1);
   Sass.ushf_l_ur b (u + 1) (u + 1) u;
@@ -497,7 +498,69 @@ let dealloc st =
   Sass.ushf_l_ur b ur_zero ur_zero ur_tmp;
   Sass.ulop3_or_ur b (u + 1) (u + 1) ur_zero;
   Sass.ulop3_not b (u + 1) (u + 1);
-  Sass.utcatomsws_and b (u + 1) 
+  Sass.utcatomsws_and b (u + 1)
+
+(* Allocate [ncols] columns: the allocator answers in [ur_init] and sets UP0
+   when it found them; until it does, wait and ask again. *)
+let alloc_tmem ?(tag = "") b ~ncols =
+  let l x = x ^ tag in
+  (* one lane asks, as ptxas has it: the others wait at the warp sync below *)
+  Sass.elect b p_loop;
+  Sass.bra b ~neg:true p_loop (l "ALLOC_SYNC");
+  Sass.label b (l "ALLOC");
+  Sass.umov b ur_init (ncols / 32);
+  Sass.depbar_sb0 b;
+  Sass.utcatomsws_fas b ur_init;
+  Sass.plop3_up0 b 0;
+  Sass.bra b 0 (l "ALLOC_OK");
+  Sass.nanosleep b;
+  Sass.jmp b (l "ALLOC");
+  Sass.label b (l "ALLOC_OK");
+  Sass.ushf_l b ur_init ur_init 5;
+  Sass.label b (l "ALLOC_SYNC");
+  Sass.warpsync b
+
+(* Each accumulator buffer is its own allocation, its address in its own slot
+   word. One allocation of all 512 columns is refused by the next launch on the
+   SM once it has been freed -- measured, with nothing but an allocate and a
+   free in the kernel (warpc talloc 512) -- while two of 256, or four of 128,
+   come back clean every time. *)
+let buffer_base st ~buf ~into =
+  Sass.lds st.b r_tmp ~ur:ur_smem ~imm:(st.slot_off - 0x400 + (4 * buf));
+  Sass.r2ur st.b into r_tmp
+
+let dealloc st =
+  let acc = List.hd st.k.tmem in
+  for buf = 0 to acc.bufs - 1 do
+    buffer_base st ~buf ~into:ur_acc;
+    free_tmem st.b ~base:ur_acc ~ncols:acc.tcols
+  done
+
+(* A probe of the allocator alone: warp 0 allocates [ncols] columns, gives up
+   its permit, frees them and exits -- the GEMM's instructions and nothing
+   else, so a launch that follows shows whether the free left anything. *)
+let tmem_probe ~ncols ~times =
+  let b = Sass.create () in
+  Sass.ldc b 1 0x37c;
+  Sass.s2r_tid b r_tid;
+  Sass.shf_r b r_warp r_tid 5;
+  Sass.isetp_ne_u32 b p_role r_warp 0;
+  Sass.bra b p_role "DONE";
+  (* each allocation's address is kept in its own uniform register *)
+  let keep = [| 1; 2; 3; 0 |] in
+  for i = 0 to times - 1 do
+    alloc_tmem ~tag:(string_of_int i) b ~ncols;
+    Sass.uiadd3 b keep.(i) ur_init 0
+  done;
+  Sass.uvirtcount_dealloc b;
+  for i = 0 to times - 1 do
+    free_tmem b ~base:keep.(i) ~ncols
+  done;
+  Sass.label b "DONE";
+  Sass.exit b;
+  [ Printf.sprintf ".kernel talloc_%dx%d" times ncols; ".sm sm_100a"; ".regs 16"; ".barriers 1"; ".threads 128"
+  ; ".smem 1024"; ".mbarriers 1"; ".tcgen05"; ".params 8" ]
+  @ Sched.schedule (Sass.items b)
 
 let lower (k : kernel) : string list =
   let b = Sass.create () in
@@ -515,7 +578,7 @@ let lower (k : kernel) : string list =
   if !nslots > 20 then failwith "too many mbarriers for the uniform register map";
   let slot_off = 0x400 + (8 * !nslots) in
   let static_bytes = 0x400 in
-  if slot_off + 4 > 0x400 + static_bytes then failwith "static shared memory overflow";
+  if slot_off + (4 * nbuf) > 0x400 + static_bytes then failwith "static shared memory overflow";
   (* offsets below are relative to the smem base register, which sits at window
      offset 0x400; the dynamic region begins right after the static bytes *)
   let dyn_base = static_bytes in
@@ -563,8 +626,7 @@ let lower (k : kernel) : string list =
   in
   let dyn_bytes = (stage_bytes * k.depth) + epi_bytes in
   let acc_cols = (List.hd k.tmem).tcols in
-  let ncols = acc_cols * nbuf in
-  if not (pow2 ncols && ncols >= 32 && ncols <= 512) then failwith "tmem columns";
+  if not (pow2 acc_cols && acc_cols >= 32 && acc_cols * nbuf <= 512) then failwith "tmem columns";
   let st =
     { b; k; pipe_slot; pipe_index; smem_dyn; stage_bytes; slot_off; labels = 0; max_reg = r_data.(1) + 63; mma_seen = 0
     ; smem_base = ur_smem; epi_off = dyn_base + (stage_bytes * k.depth); layouts; copy_bytes }
@@ -715,25 +777,23 @@ let lower (k : kernel) : string list =
         Sass.syncs_exch b ~base:(mbar_reg st p.pname ~stage:s ~buf:s) ~imm:0 ~v:ur_init
       done)
     k.pipes;
-  Sass.label b "ALLOC";
-  Sass.umov b ur_init (ncols / 32);
-  Sass.depbar_sb0 b;
-  Sass.utcatomsws_fas b ur_init;
-  Sass.plop3_up0 b 0;
-  Sass.bra b 0 "ALLOC_OK";
-  Sass.nanosleep b;
-  Sass.jmp b "ALLOC";
-  Sass.label b "ALLOC_OK";
-  Sass.ushf_l b ur_init ur_init 5;
-  Sass.mov_ur b r_tmp ur_init;
-  Sass.sts_ur b ~ur:ur_smem ~imm:(slot_off - 0x400) ~data:r_tmp;
+  for buf = 0 to nbuf - 1 do
+    alloc_tmem ~tag:(string_of_int buf) b ~ncols:acc_cols;
+    Sass.mov_ur b r_tmp ur_init;
+    Sass.sts_ur b ~ur:ur_smem ~imm:(slot_off - 0x400 + (4 * buf)) ~data:r_tmp
+  done;
   Sass.uvirtcount_dealloc b;
   Sass.label b "INIT_DONE";
   Sass.membar_cta b;
   Sass.fence_view_async b;
   Sass.bar_sync b;
-  Sass.lds b r_tmp ~ur:ur_smem ~imm:(slot_off - 0x400);
-  Sass.r2ur b ur_tmem r_tmp;
+  (* the roles whose warps touch tensor memory: the MMA's and the store's *)
+  let uses_tmem body = reads (function Mma _ | Store _ -> true | _ -> false) body in
+  let tmem_warps =
+    List.fold_left (fun acc s -> match s with Role (ws, body) when uses_tmem body -> acc + List.length ws | _ -> acc) 0 k.body
+  in
+  if not (List.exists (function Role (ws, body) -> uses_tmem body && List.mem alloc_warp ws | _ -> false) k.body)
+  then failwith "the warp that allocates tensor memory must be one that uses it";
   (* roles *)
   List.iter
     (function
@@ -768,7 +828,7 @@ let lower (k : kernel) : string list =
             Sass.bra b ~neg:true p_role tl_end
           end;
           tile_indices ();
-          Sass.uiadd3 b ur_acc ur_tmem (buf * acc_cols);
+          buffer_base st ~buf ~into:ur_acc;
           List.iter (lower_stmt st ~stage:0 ~buf ~tx_done:(Hashtbl.create 1) ~tma_index:(ref 0)) body;
           Sass.iadd3_c b r_tile r_tile grid
         done;
@@ -782,6 +842,13 @@ let lower (k : kernel) : string list =
           Sass.bra b p_role tl
         end;
         Sass.label b tl_end;
+        (* Tensor memory is freed only once nothing can touch it: the MMAs have
+           completed and every warp that reads the accumulator has read it.
+           The warps that use it meet here first. Freeing it any earlier --
+           as soon as the MMA warp has issued its last MMA -- leaves columns
+           allocated on the SM after the CTA exits, and the next launch that
+           asks for the whole of tensor memory waits for them forever. *)
+        if uses_tmem body then Sass.bar_sync_n b ~bar:1 ~count:(32 * tmem_warps);
         if lo <= alloc_warp && alloc_warp <= hi then dealloc st;
         if grid_cluster k then Sass.cluster_barrier b;
         Sass.exit b;

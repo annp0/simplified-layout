@@ -115,6 +115,9 @@ type kernel =
 (* a wider tile amortises the operand traffic, but only if there are still
    enough tiles to cover the machine: below one wave the narrow tile wins
    because it doubles the tiles and fills the idle multiprocessors *)
+(* the multiprocessors of a B200 *)
+let sms = 148
+
 let choose_tile_n ~m ~n ~tile_m =
   if n mod 256 <> 0
   then 128
@@ -122,7 +125,6 @@ let choose_tile_n ~m ~n ~tile_m =
     (* how much of a wave the wide tile leaves busy: below about three
        fifths the narrow tile wins, because doubling the tiles fills the
        multiprocessors the wide one leaves idle *)
-    let sms = 148 in
     let tiles = m / tile_m * (n / 256) in
     let waves = ((tiles + sms - 1) / sms) * sms in
     if 5 * tiles < 3 * waves then 128 else 256)
@@ -155,10 +157,14 @@ let gemm ?(tile_m = 128) ?(tile_n = 128) ?(tile_k = 64) ?bufs ?(cluster = 1) ?(c
         ; trows = tile_m
         ; tcols = tile_n
         ; (* Two accumulators let the epilogue of one tile run while the
-             mainloop of the next fills the other. A CTA cannot allocate more
-             than 256 tensor-memory columns, so a 256-wide tile can only have
-             one. *)
-          bufs = (match bufs with Some b -> b | None -> if 2 * tile_n <= 256 then 2 else 1)
+             mainloop of the next fills the other; two 256-wide ones fill
+             tensor memory exactly. A CTA with one tile has no next tile, and
+             the second allocation is only cost: measured, 972 against 889 at
+             2048 cubed. *)
+          bufs =
+            (match bufs with
+             | Some b -> b
+             | None -> if 2 * tile_n <= 512 && m / tile_m * (n / tile_n) > sms then 2 else 1)
         } ]
   ; pipes =
       [ { pname = "full"; per_stage = true; per_buffer = false; cross = false; arrivals = 1; free_at_start = false }

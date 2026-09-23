@@ -88,6 +88,9 @@ def run(path, M, N, K, repeat=20, seed=1):
         func.launch(grid=grid, block=block, args=args, shared_mem=dyn, timed=False)
     C = np.frombuffer(ctx.read_bytes(dC, M * N * 4), dtype=np.float32).reshape(M, N)
     bad = np.argwhere(np.abs(C - ref) > 1e-3)
+    # the first launch has finished and been checked; say so before timing,
+    # which launches again, so a hang is attributed to the right launch
+    print('first launch done, %d wrong' % len(bad), file=sys.stderr, flush=True)
     if os.environ.get('WARPC_DIAG') and len(bad):
         import collections
         z = int(np.sum(C[bad[:,0], bad[:,1]] == 0.0))
