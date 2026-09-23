@@ -123,7 +123,9 @@ alternate on the same GPU, three rounds each, 50 iterations a round, both
 timed between CUDA events on the device; the table gives the medians. Every
 warpc result equals numpy's; the inputs are integers in [-3, 3], so the fp32
 sums are exact and equality is the right test for the addressing, not a
-statement about rounding.
+statement about rounding. The two are different programs (see the pair below),
+and the example's timed loop calls `gemm.initialize` on the host before every
+`gemm.run`, so its times include that call.
 
     shape                warpc     CUTLASS    configuration
     1024^3               322.7       254.3    one CTA, 128 x 64
@@ -144,9 +146,12 @@ where the rounds of the two overlap at the latter. The configurations:
   and 128 x 128 per CTA, ring depth 8, two accumulators, persistent. The pair
   splits both operands, so each CTA moves the operand bytes of a 128 x 256
   tile while the grid has the granularity of a 128 x 128 one -- that is what
-  beats wave quantisation at 4096 cubed and short K. It is CUTLASS's own
-  schedule on a 2x1 cluster; their shipped kernel uses 2x2, which is correct
-  here too but slower.
+  beats wave quantisation at 4096 cubed and short K. It is not CUTLASS's
+  program. Theirs is a 2x2 cluster with the same M = 256 two-CTA MMA, a
+  Cluster Launch Control scheduler (a grid of every tile, idle clusters
+  cancelling unlaunched ones and taking their tiles), four 128-column
+  accumulator stages, an alpha/beta epilogue in 128 x 16 subtiles, and a
+  column-major D.
 - **One CTA per 128 x 256 tile** when all three dimensions are 12288 or more,
   where it beats the pair (16384^3: 1602 against 1414).
 - **One CTA per 128 x 64 tile** when 128-wide tiles would fill at most half the
