@@ -390,5 +390,10 @@ let utmacmdflush b =
 (* wait for the copy engine to have taken the staged block before it is reused *)
 let depbar_drain b = push b (I (mk ~defs:[ Tok 0 ] ~uses:[ Tok 0 ] ~lat:(Fixed 6) ~min_stall:4 "DEPBAR.LE SB0, 0x0"))
 
+(* wait until at most [n] tensor-map stores are still reading shared memory:
+   the flushes count on scoreboard 0 and finish in order, so this frees the
+   staging copy the store [n + 1] back was reading *)
+let depbar_le b ~n = push b (I (mk ~defs:[ Tok 0 ] ~uses:[ Tok 0 ] ~lat:(Fixed 6) ~min_stall:4 (pf "DEPBAR.LE SB0, %s" (hex n))))
+
 let lop3_xor_imm_r b d a imm =
   push b (I (mk ~defs:[ R d ] ~uses:[ R a ] ~lat:alu (pf "LOP3.LUT R%d, R%d, %s, RZ, 0x3c, !PT" d a (hex imm))))

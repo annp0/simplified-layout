@@ -219,14 +219,22 @@ let rec lower_stmt st ~stage ~buf ~(tx_done : (string, unit) Hashtbl.t) ~(tma_in
   | Wait p -> lower_wait st p ~stage ~buf
   | Tma { dst; src; rows; pipe = p } ->
     let b = st.b in
-    (* ptxas names the CTA's OWN barrier even for a .2CTA load, and states the
-         whole box on it (ref/tma2cta.ptx) *)
-    let bar_of _p = `Own (mbar_reg st p ~stage ~buf) in
+    (* A two-CTA MMA reads both CTAs' stages, so the stage is full only when
+       both halves have landed. Every load of the pair reports to the LEADER's
+       copy of the barrier -- the CTA field of its address with the pair bit
+       cleared, as CUTLASS masks it (0xfefffff8) -- and the leader alone states
+       the bytes to expect, the pair's whole stage. *)
+    let bar_of p = if two_cta st then `Lead (8 * mbar_slot st p ~stage ~buf) else `Own (mbar_reg st p ~stage ~buf) in
     if not (Hashtbl.mem tx_done p) then begin
       Hashtbl.replace tx_done p ();
-      (* the leader owns the barrier the pair's loads report to, so it alone
-         states how many bytes to expect, and it states the pair's whole stage *)
-      Sass.syncs_arrive_tx b ~guard:p_lane0 ~base:(mbar_reg st p ~stage ~buf) ~imm:0 ~tx:r_tmp2
+      if two_cta st
+      then begin
+        let l = new_label st "NOT_LEADER" in
+        Sass.bra b ~neg:true p_lead l;
+        Sass.syncs_arrive_tx b ~guard:p_lane0 ~base:(mbar_reg st p ~stage ~buf) ~imm:0 ~tx:r_tmp2;
+        Sass.label b l
+      end
+      else Sass.syncs_arrive_tx b ~guard:p_lane0 ~base:(mbar_reg st p ~stage ~buf) ~imm:0 ~tx:r_tmp2
     end;
     let g = ur_tma.(!tma_index) in
     incr tma_index;
@@ -388,9 +396,18 @@ let rec lower_stmt st ~stage ~buf ~(tx_done : (string, unit) Hashtbl.t) ~(tma_in
       let d = r_data.(ch mod 2) and slot = ch mod copies in
       Sass.ldtm_off b d ~n ~addr:ur_epi ~imm:imm_ld.(ch);
       st.max_reg <- max st.max_reg (d + n - 1);
+      (* The copy this block goes into was last read by the store [copies]
+         blocks back -- in this tile or the previous one. Stores finish in
+         order, so at most [copies - 1] may still be reading when it is
+         rewritten: the rest keep going while this block is staged. *)
+      Sass.depbar_le b ~n:(copies - 1);
       for q = 0 to (n / vec) - 1 do
         Sass.sts_r b ~width:(8 * vec * elem) ~r:(r_swz + q) ~imm:(slot * copy) ~data:(d + (vec * q))
       done;
+      (* the stores have taken the last block's values, so the load that
+         produced them has landed: the accumulator is free for the next tile's
+         MMAs while its last blocks are still being written out *)
+      if ch = blocks_n - 1 then (match release with Some p -> release_to_pair st p ~stage:0 ~buf | None -> ());
       (* The copy engine reads the staging copy, so the writes into it must
          have landed, not merely issued: a read scoreboard only says the store
          has taken its data out of the registers. The fence publishes them to
@@ -403,11 +420,8 @@ let rec lower_stmt st ~stage ~buf ~(tx_done : (string, unit) Hashtbl.t) ~(tma_in
       Sass.uiadd3 b (ur_st + 1) ur_tile_n (x0 + imm_x.(ch));
       Sass.uiadd3 b (ur_st + 2) ur_ey imm_y.(ch);
       Sass.utmastg b ~g:ur_st ~map:(ur_param (param_index st dst));
-      Sass.utmacmdflush b;
-      Sass.depbar_drain b;
-      Sass.warpsync b
-    done;
-    (match release with Some p -> release_to_pair st p ~stage:0 ~buf | None -> ())
+      Sass.utmacmdflush b
+    done
   | Kloop body ->
     ignore buf;
     let b = st.b in
@@ -430,14 +444,14 @@ let rec lower_stmt st ~stage ~buf ~(tx_done : (string, unit) Hashtbl.t) ~(tma_in
     (match tmas with
      | [] -> ()
      | _ ->
-       (* the bytes the loads deliver: each box's image. A .2CTA load still
-          carries only the box this CTA asked for and reports it to this
-          CTA's barrier (measured), so the count is this CTA's stage. *)
+       (* the bytes the loads deliver: each box's image, and for a pair the
+          partner's boxes too, since they report to the same barrier *)
        let tx =
          List.fold_left
            (fun acc (dst, _) -> acc + footprint (Hashtbl.find st.layouts dst) ~elem:(elem_bytes (stile st dst).sdtype))
            0 tmas
        in
+       let tx = if two_cta st then tx * st.k.cluster else tx in
        Sass.mov_imm b r_tmp2 tx);
     (match List.find_opt (function Mma _ -> true | _ -> false) body with
      | None -> ()
@@ -748,13 +762,20 @@ let lower (k : kernel) : string list =
   in
   (* the grid counts CTAs, and a cluster holds one tile per CTA *)
   let total_tiles = tiles_m * tiles_n * ctas k in
-  (* A clustered kernel is not persistent: the CTAs of a cluster multicast
-     into each other's stages, so they must stay on the same tile, and one tile
-     per CTA is what keeps them together. *)
-  let grid = if grid_cluster k || total_tiles <= 148 then total_tiles else 148 in
+  (* Persistent when there are more tiles than multiprocessors: each CTA walks
+     the tiles a grid apart. A cluster walks them together -- its CTAs are
+     consecutive and the grid is a multiple of the cluster, so they reach the
+     same cluster tile at every step -- and the stage and accumulator
+     handshakes span the tile boundaries, so a CTA can be a tile ahead of its
+     partner only as far as the ring lets it. *)
+  let grid = if total_tiles <= Dsl2.sms then total_tiles else Dsl2.sms / ctas k * ctas k in
   let persistent = grid < total_tiles in
   Sass.isetp_ne_u32 b p_role r_warp alloc_warp;
   Sass.bra b p_role "INIT_DONE";
+  (* Fetch the tensor maps now, while the barriers are set up: the first load
+     would otherwise wait on its descriptor. CUTLASS does the same in its
+     first instructions. *)
+  List.iteri (fun i (g : gmat) -> if g.via = Tmap then Sass.utmacctl_pf b ~map:(ur_param i)) k.params;
   List.iter
     (fun (p : pipe) ->
       let arrivals =
@@ -788,7 +809,7 @@ let lower (k : kernel) : string list =
   Sass.fence_view_async b;
   Sass.bar_sync b;
   (* the roles whose warps touch tensor memory: the MMA's and the store's *)
-  let uses_tmem body = reads (function Mma _ | Store _ -> true | _ -> false) body in
+  let uses_tmem body = reads (function Mma _ | Store _ | Commit _ -> true | _ -> false) body in
   let tmem_warps =
     List.fold_left (fun acc s -> match s with Role (ws, body) when uses_tmem body -> acc + List.length ws | _ -> acc) 0 k.body
   in
@@ -821,10 +842,16 @@ let lower (k : kernel) : string list =
            out of tiles part way through a pass skips the rest of it. *)
         let tl = new_label st "TILES" in
         let tl_end = new_label st "TILES_END" in
+        (* In a pair, the MMA and every stage barrier it waits on are the
+           leader's. The other CTA's tensor-core warp has nothing to issue and
+           nothing that completes for it to wait on, so it goes straight to the
+           end of its role -- where it still meets the warps that use tensor
+           memory and frees its own. *)
+        if two_cta st && reads (function Mma _ -> true | _ -> false) body then Sass.bra b ~neg:true p_lead tl_end;
         if persistent then Sass.label b tl;
         for buf = 0 to nbuf - 1 do
           if buf > 0 then begin
-            Sass.isetp_lt_u32_imm b p_role r_tile (tiles_m * tiles_n);
+            Sass.isetp_lt_u32_imm b p_role r_tile total_tiles;
             Sass.bra b ~neg:true p_role tl_end
           end;
           tile_indices ();
@@ -838,7 +865,7 @@ let lower (k : kernel) : string list =
             then (let r = r_parity.(Hashtbl.find st.pipe_index p) in Sass.lop3_xor_imm b r r 0x80000000))
           (List.rev (waits [] body));
         if persistent then begin
-          Sass.isetp_lt_u32_imm b p_role r_tile (tiles_m * tiles_n);
+          Sass.isetp_lt_u32_imm b p_role r_tile total_tiles;
           Sass.bra b p_role tl
         end;
         Sass.label b tl_end;
@@ -848,6 +875,9 @@ let lower (k : kernel) : string list =
            as soon as the MMA warp has issued its last MMA -- leaves columns
            allocated on the SM after the CTA exits, and the next launch that
            asks for the whole of tensor memory waits for them forever. *)
+        (* a warp's last tensor-map stores must have read its staging copies
+           before the warp leaves the shared memory they sit in *)
+        if reads (function Store _ -> true | _ -> false) body then Sass.depbar_drain b;
         if uses_tmem body then Sass.bar_sync_n b ~bar:1 ~count:(32 * tmem_warps);
         if lo <= alloc_warp && alloc_warp <= hi then dealloc st;
         if grid_cluster k then Sass.cluster_barrier b;
@@ -882,7 +912,12 @@ let lower (k : kernel) : string list =
             Some
               (Printf.sprintf ".tmap %s %d %d %d %d %d %d" g.name g.rows g.cols bx.box_elem bx.box_rows bx.box_cols
                  bx.box_swizzle)
-          | [] -> failwith (g.name ^ ": a tensor-map parameter no copy moves")
+          | [] ->
+            (* the kernel never reads this map (a probe that leaves the matrix
+               alone), so the host only needs something valid to encode: one
+               row of one swizzle span *)
+            let e = elem_bytes g.dtype in
+            Some (Printf.sprintf ".tmap %s %d %d %d 1 %d %d" g.name g.rows g.cols e (Atom.sw128_span / e) Atom.sw128_span)
           | _ -> failwith (g.name ^ ": moved through tiles with different layouts")))
       k.params
   in

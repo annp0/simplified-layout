@@ -71,8 +71,11 @@ let schedule (items : item list) : string list =
             ins.defs;
           (* a fence or barrier waits for every outstanding late read: the stores
              before it must have taken their data before it takes effect *)
+          (* A tensor-map store (its flush reads token 3) is waited for by an
+             explicit DEPBAR on its scoreboard, which is how several are kept
+             in flight; a drain does not wait for it. *)
           if ins.drain then begin
-            Hashtbl.iter (fun _ m -> wait := !wait lor m) pr;
+            Hashtbl.iter (fun r m -> if r <> Tok 3 then wait := !wait lor m) pr;
             if ins.branch = `Exit then Hashtbl.iter (fun _ m -> wait := !wait lor m) pw
           end;
           for i = 0 to 5 do
@@ -87,7 +90,10 @@ let schedule (items : item list) : string list =
           let wb, rb =
             if scoreboarded then begin
               if not !prev_var then begin
-                cur_wb := !wcount mod 3; incr wcount;
+                (* scoreboard 0 is never handed out: it is pinned, for the
+                   tensor-map stores an explicit DEPBAR counts and for the
+                   tensor-memory allocator, so nothing else may share it *)
+                cur_wb := 1 + (!wcount mod 2); incr wcount;
                 cur_rb := 3 + (!rcount mod 3); incr rcount
               end;
               (if ins.lat = Variable && ins.defs <> [] then !cur_wb else 7), if ins.late_uses <> [] then !cur_rb else 7

@@ -190,9 +190,23 @@ let gemm ?(tile_m = 128) ?(tile_n = 128) ?(tile_k = 64) ?bufs ?(cluster = 1) ?(c
       ]
   }
 
+(* a probe keeps only the shared tiles its body touches: a tile nothing reads
+   has no instruction to fix its layout *)
+let only_used (k : kernel) =
+  let rec names acc = function
+    | Tma { dst; _ } -> dst :: acc
+    | Mma { a; b; _ } -> a :: b :: acc
+    | Store { via; _ } -> via :: acc
+    | Kloop body | Role (_, body) -> List.fold_left names acc body
+    | _ -> acc
+  in
+  let used = List.fold_left names [] k.body in
+  { k with smem = List.filter (fun (t : stile) -> List.mem t.sname used) k.smem }
+
 (* a probe: warp 0 loads one k tile by TMA and waits for it to land *)
 let tma_probe ~m ~n ~k =
   let g = gemm ~m ~n ~k ~depth:1 () in
+  only_used
   { g with
     name = Printf.sprintf "ptma_%d_%d_%d_s1" m n k
   ; body = [ Role ([ 0 ], [ Kloop [ Wait "empty"; Tma { dst = "sa"; src = "a"; rows = Tile_m; pipe = "full" }; Tma { dst = "sb"; src = "bt"; rows = Tile_n; pipe = "full" }; Wait "full" ] ]) ]
@@ -201,6 +215,7 @@ let tma_probe ~m ~n ~k =
 (* probes: MMAs without the epilogue; the epilogue without MMAs *)
 let mma_probe ~m ~n ~k ~depth =
   let g = gemm ~m ~n ~k ~depth () in
+  only_used
   { g with
     name = Printf.sprintf "pmma_%d_%d_%d_s%d" m n k depth
   ; body =
@@ -209,6 +224,7 @@ let mma_probe ~m ~n ~k ~depth =
 
 let epi_probe ~m ~n ~k =
   let g = gemm ~m ~n ~k ~depth:1 () in
+  only_used
   { g with
     name = Printf.sprintf "pepi_%d_%d_%d_s1" m n k
   ; body = [ Role ([ 1 ], [ Commit "ready"; Wait "free" ]); Role ([ 4; 5; 6; 7 ], [ Wait "ready"; Store { dst = "c"; src = "acc"; via = "sc"; release = Some "free" } ]) ] }
