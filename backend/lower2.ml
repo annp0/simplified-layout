@@ -466,7 +466,7 @@ let store_body st (p : store_plan) ~release ~buf =
    puts the ranks of a pair on consecutive tiles along the coordinate the
    accumulator's rows stand for, so an origin along that coordinate includes
    the result's share and the other includes none. The offset must be a
-   multiple of the rank, by a power of two. *)
+   multiple of the rank. *)
 let rank_stride st ~dst ~rows =
   match mma_reading st.k dst with
   | None -> 0
@@ -478,7 +478,6 @@ let rank_stride st ~dst ~rows =
       if off v <> v * stride then failwith (dst ^ ": the rows a CTA loads are not a multiple of its rank")
     done;
     if off 0 <> 0 then failwith (dst ^ ": rank 0 does not load from the tile origin");
-    if stride <> 0 && not (pow2 stride) then failwith (dst ^ ": the rank's row stride is not a power of two");
     stride
 
 let rec lower_stmt st ~stage ~buf ~(tx_done : (string, unit) Hashtbl.t) ~(tma_index : int ref) = function
@@ -602,7 +601,8 @@ let rec lower_stmt st ~stage ~buf ~(tx_done : (string, unit) Hashtbl.t) ~(tma_in
         let origin = match rows with Tile_m -> ur_tile_m | Tile_n -> ur_tile_n in
         match rank_stride st ~dst ~rows with
         | 0 -> Sass.uiadd3 b (g + 3) origin 0
-        | stride -> Sass.ulea b (g + 3) ur_rank_x origin (log2 stride))
+        | stride when pow2 stride -> Sass.ulea b (g + 3) ur_rank_x origin (log2 stride)
+        | stride -> Sass.uimad_imm b (g + 3) ur_rank_x stride origin)
       tmas;
     (match tmas with
      | [] -> ()
@@ -723,7 +723,7 @@ let dealloc st =
   let acc = List.hd st.k.tmem in
   for buf = 0 to acc.bufs - 1 do
     buffer_base st ~buf ~into:ur_acc;
-    free_tmem st.b ~base:ur_acc ~ncols:acc.tcols
+    free_tmem st.b ~base:ur_acc ~ncols:(Atom.tmem_columns acc.tcols)
   done
 
 (* A probe of the allocator alone: warp 0 allocates [ncols] columns, gives up
@@ -815,8 +815,9 @@ let lower (k : kernel) : string list =
       0 k.smem
   in
   let dyn_bytes = (stage_bytes * k.depth) + epi_bytes in
-  let acc_cols = (List.hd k.tmem).tcols in
-  if not (pow2 acc_cols && acc_cols >= 32 && acc_cols * nbuf <= 512) then failwith "tmem columns";
+  (* each buffer is its own allocation, of the power of two that holds it *)
+  let acc_cols = Atom.tmem_columns (List.hd k.tmem).tcols in
+  if acc_cols * nbuf > 512 then failwith "tmem columns";
   let st =
     { b; k; pipe_slot; pipe_index; smem_dyn; stage_bytes; slot_off; labels = 0; max_reg = r_data.(1) + 63; mma_seen = 0
     ; ring_start = 0

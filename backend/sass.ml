@@ -146,6 +146,10 @@ let ulop3_not b d a = push b (I (mk ~defs:[ UR d ] ~uses:[ UR a ] ~lat:alu (pf "
 
 (* d = (a << sh) + c *)
 let ulea b d a c sh = push b (I (mk ~defs:[ UR d ] ~uses:[ UR a; UR c ] ~lat:alu (pf "ULEA UR%d, UR%d, UR%d, %s" d a c (hex sh))))
+
+(* d = a * imm + c, as ptxas spells it (UIMAD UR5, UR5, -0xa0, URZ) *)
+let uimad_imm b d a imm c =
+  push b (I (mk ~defs:[ UR d ] ~uses:[ UR a; UR c ] ~lat:alu (pf "UIMAD UR%d, UR%d, %s, UR%d" d a (hex imm) c)))
 let r2ur b u r = push b (I (mk ~defs:[ UR u ] ~uses:[ R r ] ~lat:(Fixed 13) (pf "R2UR UR%d, R%d" u r)))
 let mov_ur b d u = push b (I (mk ~defs:[ R d ] ~uses:[ UR u ] ~lat:alu (pf "IMAD.U32 R%d, RZ, RZ, UR%d" d u)))
 let lea_ur b d a u sh = push b (I (mk ~defs:[ R d ] ~uses:[ R a; UR u ] ~lat:alu (pf "LEA R%d, R%d, UR%d, %s" d a u (hex sh))))

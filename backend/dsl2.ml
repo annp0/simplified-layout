@@ -220,7 +220,7 @@ let gemm ?(tile_m = 128) ?(tile_n = 128) ?(tile_k = 64) ?bufs ?(cluster = 1) ?(c
           bufs =
             (match bufs with
              | Some b -> b
-             | None -> if 2 * atom.n <= 512 && m / tile_m * (n / tile_n) > sms then 2 else 1)
+             | None -> if 2 * Atom.tmem_columns atom.n <= 512 && (m + tile_m - 1) / tile_m * ((n + tile_n - 1) / tile_n) > sms then 2 else 1)
         } ]
   ; pipes =
       [ { pname = "full"; per_stage = true; per_buffer = false; cross = false; arrivals = 1; free_at_start = false }
@@ -235,7 +235,8 @@ let gemm ?(tile_m = 128) ?(tile_n = 128) ?(tile_k = 64) ?bufs ?(cluster = 1) ?(c
        the one the measurements favour *)
   ; cluster
   ; cluster_n
-  ; tile_m; tile_n; tile_k; k_total = k; tile_m_count = m / tile_m; tile_n_count = n / tile_n
+  ; tile_m; tile_n; tile_k; k_total = k; tile_m_count = (m + tile_m - 1) / tile_m
+  ; tile_n_count = (n + tile_n - 1) / tile_n
   ; body =
       [ Role ([ 0 ], [ Kloop [ Wait "empty"; Tma { dst = "sa"; src = "a"; rows = Tile_m; pipe = "full" }; Tma { dst = "sb"; src = "bt"; rows = Tile_n; pipe = "full" } ] ])
       ; Role

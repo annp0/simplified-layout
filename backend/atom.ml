@@ -220,6 +220,12 @@ let umma_string u =
 
 (* ---- tensor memory ---- *)
 
+(* the columns an allocation of at least [n] takes: a power of two, 32 at
+   least -- what the allocator hands out *)
+let tmem_columns n =
+  let rec up c = if c >= n then c else up (2 * c) in
+  up 32
+
 (* The accumulator of a cta_group::1 M=128 MMA: row r is tensor-memory lane r,
    column c is column c, and an address is lane << 16 | column. *)
 let tmem_accumulator ~rows ~cols : (Space.logical, Space.physical) Layout.t =
