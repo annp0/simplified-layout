@@ -40,7 +40,8 @@ let () =
       (Layout.interleave ~by:(Linear.canonical (Product [ Bound bm; Bound bn ])) (Atom.ldtm_32x32b ~n))
       (Layout.divide ~by:(Product [ Bound 32; Bound n ]) (Atom.tmem_accumulator ~rows ~cols))
   in
-  check "tensor-memory load contract" (not (raises (fun () -> Atom.check_ldtm ld ~blocks_m:bm ~blocks_n:bn ~n)));
+  let at w ch l r = Layout.offset ld (Coord.Tuple [ Tuple [ Idx w; Idx ch ]; Tuple [ Idx l; Idx r ] ]) in
+  check "tensor-memory load contract" (not (raises (fun () -> Atom.check_ldtm ~at ~blocks_w:bm ~blocks_ch:bn ~n)));
   let base w ch = Layout.offset ld (Coord.Tuple [ Tuple [ Idx w; Idx ch ]; Tuple [ Idx 0; Idx 0 ] ]) in
   (* measured: warp w reads its quarter at + w << 21, chunk ch at + 32 ch *)
   check "block row w starts at tensor-memory lane 32 w" (List.for_all (fun w -> base w 0 = w lsl 21) [ 0; 1; 2; 3 ]);
@@ -74,6 +75,21 @@ let () =
   check "emitted staging expressions agree with the layout" !ok;
   let bx = Atom.tma_box box ~elem:4 in
   check "store box" (bx.box_rows = 32 && bx.box_cols = 32 && bx.box_elem = 4 && bx.box_swizzle = 128)
+
+let () =
+  (* The transposed accumulator's staging write, as cuBLAS's nvjet stages it
+     at 8192^3: register r of lane l of a tcgen05.ld.32x32b.x8 is output row
+     r, column l, of an 8 x 32 f32 box with the 128-byte swizzle. nvjet's
+     STS addresses are 4 l xor (0x90 r) -- (r << 7) + (4 l xor (r << 4)). *)
+  let box = Atom.swizzled_rows ~rows:8 ~cols:32 ~elem:4 in
+  let sts = Layout.compose (Atom.ldtm_32x32b ~n:8) (Layout.compose (Lower2.transpose ~rows:32 ~cols:8) box) in
+  let ok = ref true in
+  for l = 0 to 31 do
+    for r = 0 to 7 do
+      if Layout.offset sts (Coord.Tuple [ Idx l; Idx r ]) <> (4 * l) lxor (0x90 * r) then ok := false
+    done
+  done;
+  check "transposed staging addresses are nvjet's" !ok
 
 let () =
   (* the emitter's exact division, where a tile count is not a power of two *)

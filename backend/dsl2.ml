@@ -171,13 +171,19 @@ let choose ~m ~n ~k =
   else { c_tile_n = choose_tile_n ~m ~n ~tile_m:128; c_depth = 4; c_cluster = 1; c_pair = false }
 
 let gemm ?(tile_m = 128) ?(tile_n = 128) ?(tile_k = 64) ?bufs ?(cluster = 1) ?(cluster_n = 1) ?(pair = false)
-    ~m ~n ~k ~depth () =
+    ?(swap = false) ~m ~n ~k ~depth () =
   (* One instruction per 16 columns of K: M rows over the CTAs it spans, N the
-     accumulator's columns. [pair] asks for the CTA-pair form. *)
+     accumulator's columns. [pair] asks for the CTA-pair form. [swap] makes the
+     MMA's A operand the tile of B^T, as cuBLAS's nvjet kernels do: the
+     accumulator then holds the output tile transposed, its lanes running
+     along the output's columns, and a CTA's tile_m x tile_n output is the
+     atom's N x (M / CTAs). *)
   let ctas = if pair then 2 else 1 in
   let atom =
-    Atom.umma ~ab:F16 ~acc:F32 ~m:(tile_m * ctas) ~n:tile_n ~ctas ~a_major:K_major ~b_major:K_major ~a_src:Smem_desc
+    let m, n = if swap then tile_n * ctas, tile_m else tile_m * ctas, tile_n in
+    Atom.umma ~ab:F16 ~acc:F32 ~m ~n ~ctas ~a_major:K_major ~b_major:K_major ~a_src:Smem_desc
   in
+  let a_tile, b_tile = if swap then "sb", "sa" else "sa", "sb" in
   (* each CTA stages the rows of A and of B the atom gives it *)
   let rows_of l = snd (Atom.cta_rows l ~cols:(Atom.umma_k atom) ~v:0) in
   { name = Printf.sprintf "pgemm_%d_%d_%d_s%d_t%d" m n k depth tile_n
@@ -193,17 +199,19 @@ let gemm ?(tile_m = 128) ?(tile_n = 128) ?(tile_k = 64) ?bufs ?(cluster = 1) ?(c
        wrong, and half of it per CTA is what makes their 230 KB of shared
        memory hold eight stages. *)
   ; smem =
-      [ { sname = "sa"; sdtype = F16; srows = rows_of (Atom.umma_a atom); scols = tile_k; ring = Stages }
-      ; { sname = "sb"; sdtype = F16; srows = rows_of (Atom.umma_b atom); scols = tile_k; ring = Stages }
-        (* one 32 x 32 block of the accumulator per warp, two deep so a block
-           is written while the copy engine still reads the previous one *)
-      ; { sname = "sc"; sdtype = F32; srows = 32; scols = 32; ring = Per_warp 2 }
+      [ { sname = "sa"; sdtype = F16; srows = rows_of (if swap then Atom.umma_b atom else Atom.umma_a atom); scols = tile_k; ring = Stages }
+      ; { sname = "sb"; sdtype = F16; srows = rows_of (if swap then Atom.umma_a atom else Atom.umma_b atom); scols = tile_k; ring = Stages }
+        (* one block of the output per warp, two deep so a block is written
+           while the copy engine still reads the previous one: 32 rows by 32
+           columns, or, with the accumulator transposed, 8 rows by the 32
+           columns of the warp's lanes, as nvjet stages it *)
+      ; { sname = "sc"; sdtype = F32; srows = (if swap then 8 else 32); scols = 32; ring = Per_warp 2 }
       ]
   ; depth
   ; tmem =
       [ { tname = "acc"
-        ; trows = tile_m
-        ; tcols = tile_n
+        ; trows = snd (Atom.cta_rows (Atom.umma_c atom) ~cols:atom.n ~v:0)
+        ; tcols = atom.n
         ; (* Two accumulators let the epilogue of one tile run while the
              mainloop of the next fills the other; two 256-wide ones fill
              tensor memory exactly. A CTA with one tile has no next tile, and
@@ -212,7 +220,7 @@ let gemm ?(tile_m = 128) ?(tile_n = 128) ?(tile_k = 64) ?bufs ?(cluster = 1) ?(c
           bufs =
             (match bufs with
              | Some b -> b
-             | None -> if 2 * tile_n <= 512 && m / tile_m * (n / tile_n) > sms then 2 else 1)
+             | None -> if 2 * atom.n <= 512 && m / tile_m * (n / tile_n) > sms then 2 else 1)
         } ]
   ; pipes =
       [ { pname = "full"; per_stage = true; per_buffer = false; cross = false; arrivals = 1; free_at_start = false }
@@ -232,7 +240,7 @@ let gemm ?(tile_m = 128) ?(tile_n = 128) ?(tile_k = 64) ?bufs ?(cluster = 1) ?(c
       [ Role ([ 0 ], [ Kloop [ Wait "empty"; Tma { dst = "sa"; src = "a"; rows = Tile_m; pipe = "full" }; Tma { dst = "sb"; src = "bt"; rows = Tile_n; pipe = "full" } ] ])
       ; Role
           ( [ 1 ]
-          , [ Wait "free"; Kloop [ Wait "full"; Mma { atom; d = "acc"; a = "sa"; b = "sb" }; Commit "empty" ]; Commit "ready" ] )
+          , [ Wait "free"; Kloop [ Wait "full"; Mma { atom; d = "acc"; a = a_tile; b = b_tile }; Commit "empty" ]; Commit "ready" ] )
       ; Role ([ 4; 5; 6; 7 ], [ Wait "ready"; Store { dst = "c"; src = "acc"; via = "sc"; release = Some "free" } ])
       ]
   }

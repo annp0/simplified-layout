@@ -16,6 +16,8 @@ let round_up a m = (a + m - 1) / m * m
 let pow2 n = n > 0 && n land (n - 1) = 0
 
 let rec log2 n = if n <= 1 then 0 else 1 + log2 (n / 2)
+let rec gcd a b = if b = 0 then a else gcd b (a mod b)
+let lcm a b = a / gcd a b * b
 let elem_bytes = Atom.elt_bytes
 
 (* registers *)
@@ -52,6 +54,7 @@ let ur_tma = [| 44; 48 |] and ur_epi = 25
 let ur_st = 44 (* the store group, only live in the epilogue *)
 let ur_esrc = 23 (* this warp's copy of the staging tile *)
 let ur_ey = 0 (* the row coordinate of this warp's blocks *)
+let ur_ex = 17 (* and the column coordinate *)
 
 (* Scratch for the two operand descriptor bases of the stage being issued.
    Keeping one per stage would cost a register per stage and the pipeline needs
@@ -78,6 +81,7 @@ type st =
   ; mutable labels : int
   ; mutable max_reg : int
   ; mutable mma_seen : int (* MMAs emitted in the current loop body *)
+  ; mutable ring_start : int (* the stage the k loop of the tile being emitted starts on *)
   }
 
 let new_label st p = st.labels <- st.labels + 1; Printf.sprintf "%s_%d" p st.labels
@@ -253,8 +257,38 @@ let release_to_pair st p ~stage ~buf =
     Sass.syncs_arrive_red st.b ~guard:p_lane0 ~base:ur_peer_bar ~imm:0
   end
 
+(* The output coordinate an accumulator's rows -- its tensor-memory lanes --
+   stand for: the rows of the MMA's A operand, whichever matrix the load that
+   fills that operand reads. An accumulator no MMA writes (a probe) is taken
+   in the output's own orientation. *)
+let acc_rows_coord (k : kernel) acc =
+  let rec mma = function
+    | Mma { d; a; _ } when d = acc -> [ a ]
+    | Kloop b | Role (_, b) -> List.concat_map mma b
+    | _ -> []
+  in
+  match List.sort_uniq compare (List.concat_map mma k.body) with
+  | [] -> Tile_m
+  | [ a ] ->
+    let rec fill = function
+      | Tma { dst; rows; _ } when dst = a -> [ rows ]
+      | Kloop b | Role (_, b) -> List.concat_map fill b
+      | _ -> []
+    in
+    (match List.sort_uniq compare (List.concat_map fill k.body) with
+     | [ r ] -> r
+     | _ -> failwith (a ^ ": filled from no matrix, or from several"))
+  | _ -> failwith (acc ^ ": written by MMAs with different operands")
+
+(* [rows] x [cols] indices, read as the index of the transposed [cols] x
+   [rows]: (i, j) -> j * rows + i *)
+let transpose ~rows ~cols : (Space.logical, Space.logical) Layout.t =
+  Layout.of_linear (Group [ Axis { size = rows; stride = 1 }; Axis { size = cols; stride = rows } ])
+
 (* Everything a store needs, derived and checked, with nothing emitted: the
-   layouts it composes, the expressions it will emit, the immediates. *)
+   layouts it composes, the expressions it will emit, the immediates. The
+   runtime coordinate of every expression is the warp's lane quarter, "c";
+   the compile-time index is the block along the load's chunks. *)
 type store_plan =
   { sp_dst : string
   ; e_ld : Expr.t
@@ -262,76 +296,90 @@ type store_plan =
   ; e_copy : Expr.t
   ; e_y : Expr.t
   ; imm_y : int array
-  ; x0 : int
+  ; e_x : Expr.t
   ; imm_x : int array
   ; sts : (Space.thread_value, Space.physical) Layout.t
-  ; sp_n : int
-  ; vec : int
+  ; sp_n : int (* registers per lane per load *)
+  ; vec : int (* elements per shared-memory store *)
   ; sp_elem : int
   ; copy : int
   ; copies : int
-  ; blocks_n : int
+  ; blocks_ch : int
   }
 
 let store_plan st ~dst ~src ~via =
-    let acc = ttile st src and sc = stile st via in
-    let box = Hashtbl.find st.layouts via in
-    let copies =
-      match sc.ring with Per_warp n -> n | Stages -> failwith (via ^ ": a staging tile has copies per warp")
-    in
-    let copy = Hashtbl.find st.copy_bytes via in
-    let n = sc.scols and elem = elem_bytes sc.sdtype in
-    if sc.srows <> Atom.ldtm_block then failwith (via ^ ": a warp's block has the 32 rows of its lane quarter");
-    let blocks_m = acc.trows / Atom.ldtm_block and blocks_n = acc.tcols / n in
-    (* The tensor-memory load's fragment, dealt over the accumulator's blocks
-       and composed with the accumulator's layout, is the load's address map;
-       Atom checks it against what one warp-uniform address reads. *)
-    let frag = Atom.ldtm_32x32b ~n in
-    let block = Shape.Product [ Bound Atom.ldtm_block; Bound n ] in
-    let grid = Linear.canonical (Product [ Bound blocks_m; Bound blocks_n ]) in
-    let ld =
-      Layout.compose
-        (Layout.interleave ~by:grid frag)
-        (Layout.divide ~by:block (Atom.tmem_accumulator ~rows:acc.trows ~cols:acc.tcols))
-    in
-    Atom.check_ldtm ld ~blocks_m ~blocks_n ~n;
-    let rt = Shape.Bound blocks_m in
-    let w_of = function Coord.Idx w -> w | Tuple _ -> assert false in
-    let e_ld, imm_ld =
-      split ~name:"tensor-memory load" ~rt ~n:blocks_n (fun c ch ->
-        Layout.offset ld (Coord.Tuple [ Tuple [ Idx (w_of c); Idx ch ]; Tuple [ Idx 0; Idx 0 ] ]))
-    in
-    (* The staging write is the same fragment composed with the staging tile's
-       layout -- the box the copy engine reads -- so a register's address is
-       where the store will look for it. *)
-    let sts = Layout.compose frag box in
-    if not (Layout.is_injective sts) then failwith (via ^ ": two values of a fragment land on one address");
-    let vec = 16 / elem in
-    for l = 0 to Atom.ldtm_block - 1 do
-      for q = 0 to (n / vec) - 1 do
-        let a e = Layout.offset sts (Coord.Tuple [ Idx l; Idx ((vec * q) + e) ]) in
-        if a 0 mod 16 <> 0 then failwith "store: a register vector is not 16-byte aligned";
-        for e = 1 to vec - 1 do
-          if a e <> a 0 + (e * elem) then failwith "store: a register vector is not contiguous"
-        done
-      done
-    done;
-    (* A block's place in the output is its place in the tile's division into
-       blocks; the copy engine takes it as a coordinate pair. *)
-    let tile : (Space.logical, Space.logical) Layout.t =
-      Layout.divide ~by:block (Layout.of_linear (Linear.canonical (Product [ Bound acc.trows; Bound acc.tcols ])))
-    in
-    let origin c ch = Layout.offset tile (Coord.Tuple [ Tuple [ Idx 0; Idx 0 ]; Tuple [ Idx (w_of c); Idx ch ] ]) in
-    let e_y, imm_y = split ~name:"store row" ~rt ~n:blocks_n (fun c ch -> origin c ch / acc.tcols) in
-    let e_x, imm_x = split ~name:"store column" ~rt ~n:blocks_n (fun c ch -> origin c ch mod acc.tcols) in
-    let x0 = match e_x with Expr.Const k -> k | _ -> failwith "store: a block's column depends on the warp" in
-    (* the warp's copies of the staging tile: the copies of the block row it
-       reads *)
-    let e_copy = Expr.scale (copies * copy) (Expr.var "c") in
-    (* The runtime coordinate of all of these is the block row, which the load
-       fixes to the warp's lane quarter. *)
-    { sp_dst = dst; e_ld; imm_ld; e_copy; e_y; imm_y; x0; imm_x; sts; sp_n = n; vec; sp_elem = elem; copy; copies
-    ; blocks_n }
+  let acc = ttile st src and sc = stile st via in
+  let box = Hashtbl.find st.layouts via in
+  let copies =
+    match sc.ring with Per_warp n -> n | Stages -> failwith (via ^ ": a staging tile has copies per warp")
+  in
+  let copy = Hashtbl.find st.copy_bytes via in
+  let elem = elem_bytes sc.sdtype in
+  let lanes = Atom.ldtm_block in
+  (* The accumulator's lanes are output rows, or -- when the MMA's A operand
+     is the second matrix -- output columns: then the CTA's output tile is the
+     accumulator transposed. *)
+  let lanes_are_cols = acc_rows_coord st.k src = Tile_n in
+  let out_cols = if lanes_are_cols then acc.trows else acc.tcols in
+  (* the map from the accumulator's coordinates to the output tile's index *)
+  let to_out ~rows ~cols = if lanes_are_cols then transpose ~rows ~cols else Layout.of_linear (Linear.canonical (Product [ Bound rows; Bound cols ])) in
+  (* One tcgen05.ld.32x32b covers 32 lanes by n columns of the accumulator:
+     in output coordinates, the staging tile. *)
+  let n = if lanes_are_cols then sc.srows else sc.scols in
+  if (if lanes_are_cols then sc.scols else sc.srows) <> lanes
+  then failwith (via ^ ": the staging tile spans the 32 lanes of a warp's quarter");
+  let frag = Atom.ldtm_32x32b ~n in
+  let block = Shape.Product [ Bound lanes; Bound n ] in
+  let blocks_w = acc.trows / lanes and blocks_ch = acc.tcols / n in
+  (* The load's fragment, dealt over the accumulator's blocks and composed
+     with the accumulator's layout, is the load's address map; Atom checks it
+     against what one warp-uniform address reads. *)
+  let ld =
+    Layout.compose
+      (Layout.interleave ~by:(Linear.canonical (Product [ Bound blocks_w; Bound blocks_ch ])) frag)
+      (Layout.divide ~by:block (Atom.tmem_accumulator ~rows:acc.trows ~cols:acc.tcols))
+  in
+  let at w ch l r = Layout.offset ld (Coord.Tuple [ Tuple [ Idx w; Idx ch ]; Tuple [ Idx l; Idx r ] ]) in
+  Atom.check_ldtm ~at ~blocks_w ~blocks_ch ~n;
+  let rt = Shape.Bound blocks_w in
+  let w_of = function Coord.Idx w -> w | Tuple _ -> assert false in
+  let e_ld, imm_ld = split ~name:"tensor-memory load" ~rt ~n:blocks_ch (fun c ch -> at (w_of c) ch 0 0) in
+  (* The staging write is the same fragment, taken to output coordinates and
+     composed with the staging tile's layout -- the box the copy engine reads
+     -- so a register's address is where the store will look for it. *)
+  let sts = Layout.compose frag (Layout.compose (to_out ~rows:lanes ~cols:n) box) in
+  if not (Layout.is_injective sts) then failwith (via ^ ": two values of a fragment land on one address");
+  (* the widest store whose registers are contiguous and aligned, read off the
+     composite: 16 bytes when a lane's registers run along a staging row, one
+     element when they run down its columns *)
+  let reg_addr l r = Layout.offset sts (Coord.Tuple [ Idx l; Idx r ]) in
+  let fits v =
+    n mod v = 0
+    && List.for_all
+         (fun l ->
+           List.for_all
+             (fun q ->
+               let a0 = reg_addr l (v * q) in
+               a0 mod (v * elem) = 0 && List.for_all (fun e -> reg_addr l ((v * q) + e) = a0 + (e * elem)) (List.init v Fun.id))
+             (List.init (n / v) Fun.id))
+         (List.init lanes Fun.id)
+  in
+  let vec = List.find fits (List.filter (fun v -> v >= 1) [ 16 / elem; 8 / elem; 4 / elem; 1 ]) in
+  (* A block's place in the output is its place in the accumulator's division
+     into blocks, taken to output coordinates; the copy engine takes it as a
+     coordinate pair. *)
+  let tile : (Space.logical, Space.logical) Layout.t =
+    Layout.compose
+      (Layout.divide ~by:block (Layout.of_linear (Linear.canonical (Product [ Bound acc.trows; Bound acc.tcols ]))))
+      (to_out ~rows:acc.trows ~cols:acc.tcols)
+  in
+  let origin w ch = Layout.offset tile (Coord.Tuple [ Tuple [ Idx 0; Idx 0 ]; Tuple [ Idx w; Idx ch ] ]) in
+  let e_y, imm_y = split ~name:"store row" ~rt ~n:blocks_ch (fun c ch -> origin (w_of c) ch / out_cols) in
+  let e_x, imm_x = split ~name:"store column" ~rt ~n:blocks_ch (fun c ch -> origin (w_of c) ch mod out_cols) in
+  (* the warp's copies of the staging tile *)
+  let e_copy = Expr.scale (copies * copy) (Expr.var "c") in
+  { sp_dst = dst; e_ld; imm_ld; e_copy; e_y; imm_y; e_x; imm_x; sts; sp_n = n; vec; sp_elem = elem; copy; copies
+  ; blocks_ch }
 
 let quarter e = Expr.bind "c" (Expr.modulo (Expr.var "warpid") 4) e
 
@@ -365,11 +413,21 @@ let store_body st (p : store_plan) ~release ~buf =
   Emit.into em ~range ~reg (quarter p.e_ld) ~dst:r_tmp2;
   Sass.lea_ur b r_tmp2 r_tmp2 ur_acc 0;
   Sass.r2ur b ur_epi r_tmp2;
-  Emit.into em ~range ~reg (quarter p.e_y) ~dst:r_tmp;
-  Sass.lea_ur b r_tmp r_tmp ur_tile_m 0;
-  Sass.r2ur b ur_ey r_tmp;
+  (* a block coordinate the warp does not change is the tile's origin plus an
+     immediate; one it does is computed once per tile *)
+  let coord e ~origin ~into =
+    match e with
+    | Expr.Const k -> origin, k
+    | e ->
+      Emit.into em ~range ~reg (quarter e) ~dst:r_tmp;
+      Sass.lea_ur b r_tmp r_tmp origin 0;
+      Sass.r2ur b into r_tmp;
+      into, 0
+  in
+  let ur_y, y0 = coord p.e_y ~origin:ur_tile_m ~into:ur_ey in
+  let ur_x, x0 = coord p.e_x ~origin:ur_tile_n ~into:ur_ex in
   st.max_reg <- max st.max_reg em.high;
-  let imm_ld = p.imm_ld and imm_x = p.imm_x and imm_y = p.imm_y and x0 = p.x0 and blocks_n = p.blocks_n in
+  let imm_ld = p.imm_ld and imm_x = p.imm_x and imm_y = p.imm_y and blocks_n = p.blocks_ch in
   let dst = p.sp_dst in
     for ch = 0 to blocks_n - 1 do
       let d = r_data.(ch mod 2) and slot = ch mod copies in
@@ -396,25 +454,25 @@ let store_body st (p : store_plan) ~release ~buf =
       Sass.fence_view_async b;
       Sass.warpsync b;
       Sass.uiadd3 b ur_st ur_esrc (slot * copy);
-      Sass.uiadd3 b (ur_st + 1) ur_tile_n (x0 + imm_x.(ch));
-      Sass.uiadd3 b (ur_st + 2) ur_ey imm_y.(ch);
+      Sass.uiadd3 b (ur_st + 1) ur_x (x0 + imm_x.(ch));
+      Sass.uiadd3 b (ur_st + 2) ur_y (y0 + imm_y.(ch));
       Sass.utmastg b ~g:ur_st ~map:(ur_param (param_index st dst));
       Sass.utmacmdflush b
     done
 
 (* The first row of an operand CTA rank v loads, relative to the tile origin
-   its load starts from: the atom's share of the operand, less the rows of
+   its load starts from: the atom's share of the operand, less the share of
    the result that origin already places this CTA at. The CTA-to-tile map
-   puts the ranks of a pair on consecutive result rows, so a row origin
-   includes the result's share and a column origin includes none. The
-   offset must be a multiple of the rank, by a power of two. *)
+   puts the ranks of a pair on consecutive tiles along the coordinate the
+   accumulator's rows stand for, so an origin along that coordinate includes
+   the result's share and the other includes none. The offset must be a
+   multiple of the rank, by a power of two. *)
 let rank_stride st ~dst ~rows =
   match mma_reading st.k dst with
   | None -> 0
   | Some (u, which) ->
-    let off v =
-      fst (share_rows u (which :> [ `A | `B | `C ]) ~v) - (match rows with Tile_m -> fst (share_rows u `C ~v) | Tile_n -> 0)
-    in
+    let acc_rows = acc_rows_coord st.k (List.hd st.k.tmem).tname in
+    let off v = fst (share_rows u (which :> [ `A | `B | `C ]) ~v) - (if rows = acc_rows then fst (share_rows u `C ~v) else 0) in
     let stride = if u.ctas > 1 then off 1 - off 0 else 0 in
     for v = 0 to u.ctas - 1 do
       if off v <> v * stride then failwith (dst ^ ": the rows a CTA loads are not a multiple of its rank")
@@ -529,7 +587,12 @@ let rec lower_stmt st ~stage ~buf ~(tx_done : (string, unit) Hashtbl.t) ~(tma_in
     let b = st.b in
     let s = st.k.depth in
     let t = st.k.k_total / st.k.tile_k in
-    let rounds = t / s and tail = t mod s in
+    (* The ring is continuous across tiles: this tile's k loop starts on the
+       stage the previous one ended on, runs the head of the ring from there
+       to its end, then whole passes, then the stages left over. *)
+    let s0 = st.ring_start in
+    let head = if s0 = 0 then 0 else min (s - s0) t in
+    let rounds = (t - head) / s and tail = (t - head) mod s in
     let waited = List.filter_map (function Wait p -> Some p | _ -> None) body in
     let tmas = List.filter_map (function Tma { dst; src = _; rows; pipe = _ } -> Some (dst, rows) | _ -> None) body in
     List.iteri
@@ -573,29 +636,41 @@ let rec lower_stmt st ~stage ~buf ~(tx_done : (string, unit) Hashtbl.t) ~(tma_in
            desc_low st ~ur:(ur_dbase_block + (2 * stage) + 1) ~off:(Hashtbl.find st.smem_dyn bb + (stage * st.stage_bytes))
          done
      | Some _ -> assert false);
-    if rounds > 1 then Sass.mov_rz b r_cnt;
-    let l = new_label st "KLOOP" in
-    Sass.label b l;
+    let emit_stage stage =
+      let tx_done = Hashtbl.create 2 and tma_index = ref 0 in
+      List.iter (lower_stmt st ~stage ~buf ~tx_done ~tma_index) body
+    in
+    (* A stage barrier's phase is the number of passes the ring has made, so
+       the one parity every stage shares flips each time the ring wraps past
+       its last stage -- wherever the tile started. *)
+    let wrap () =
+      List.iter
+        (fun p -> if (pipe st p).per_stage then (let r = r_parity.(Hashtbl.find st.pipe_index p) in Sass.lop3_xor_imm b r r 0x80000000))
+        waited
+    in
     st.mma_seen <- 0;
-    for stage = 0 to s - 1 do
-      let tx_done = Hashtbl.create 2 and tma_index = ref 0 in
-      List.iter (lower_stmt st ~stage ~buf ~tx_done ~tma_index) body
+    for stage = s0 to s0 + head - 1 do
+      emit_stage stage
     done;
-    (* every pass over the ring completes one phase of each stage barrier, so
-       the parity flips here whether or not the pass is a loop iteration *)
-    List.iter
-      (fun p -> if (pipe st p).per_stage then (let r = r_parity.(Hashtbl.find st.pipe_index p) in Sass.lop3_xor_imm b r r 0x80000000))
-      waited;
-    if rounds > 1 then begin
-      Sass.viadd b r_cnt r_cnt 1;
-      Sass.isetp_lt_u32_imm b p_loop r_cnt rounds;
-      Sass.bra b p_loop l
+    if head > 0 && s0 + head = s then wrap ();
+    if rounds > 0 then begin
+      if rounds > 1 then Sass.mov_rz b r_cnt;
+      let l = new_label st "KLOOP" in
+      Sass.label b l;
+      for stage = 0 to s - 1 do
+        emit_stage stage
+      done;
+      wrap ();
+      if rounds > 1 then begin
+        Sass.viadd b r_cnt r_cnt 1;
+        Sass.isetp_lt_u32_imm b p_loop r_cnt rounds;
+        Sass.bra b p_loop l
+      end
     end;
-    (* the k tiles left over when the ring does not divide them: one more pass
-       over the first [tail] stages, with the parities the loop left behind *)
+    (* the k tiles left over: the first [tail] stages of one more pass, with the
+       parities the loop left behind; the next tile starts where they end *)
     for stage = 0 to tail - 1 do
-      let tx_done = Hashtbl.create 2 and tma_index = ref 0 in
-      List.iter (lower_stmt st ~stage ~buf ~tx_done ~tma_index) body
+      emit_stage stage
     done
   | Role _ -> failwith "nested role"
 
@@ -744,6 +819,7 @@ let lower (k : kernel) : string list =
   if not (pow2 acc_cols && acc_cols >= 32 && acc_cols * nbuf <= 512) then failwith "tmem columns";
   let st =
     { b; k; pipe_slot; pipe_index; smem_dyn; stage_bytes; slot_off; labels = 0; max_reg = r_data.(1) + 63; mma_seen = 0
+    ; ring_start = 0
     ; smem_base = ur_smem; epi_off = dyn_base + (stage_bytes * k.depth); layouts; copy_bytes }
   in
   (* a store's warps read tensor memory through their lane quarters, so they
@@ -770,22 +846,39 @@ let lower (k : kernel) : string list =
      down [group] rows before moving across and the tiles in flight share
      their operand rows in L2. What is emitted is the decided strided form of
      the map from the index to each coordinate of the tile's origin. *)
-  let tiles_m = k.tile_m_count / k.cluster and tiles_n = k.tile_n_count / k.cluster_n in
+  (* The CTAs one MMA spans hold neighbouring blocks of its result, so they
+     sit on neighbouring tiles along the output coordinate the accumulator's
+     rows stand for: down the rows, or -- when the MMA's A operand is the
+     second matrix -- across the columns. *)
+  let cluster_on_cols = match k.tmem with t :: _ -> acc_rows_coord k t.tname = Tile_n | [] -> false in
+  if cluster_on_cols && k.cluster_n > 1 then failwith "a cluster along the columns has no second axis yet";
+  let tiles_m, tiles_n =
+    if cluster_on_cols then k.tile_m_count, k.tile_n_count / k.cluster
+    else k.tile_m_count / k.cluster, k.tile_n_count / k.cluster_n
+  in
   let group =
     let rec g n = if n * 2 <= tiles_m && n < 8 then g (n * 2) else n in
     let g = g 1 in
     if pow2 tiles_n && tiles_m mod g = 0 then g else 1
   in
-  let width = tiles_n * k.cluster_n in
+  let width = k.tile_n_count in
   let cta_grid : (Space.thread_value, Space.logical) Layout.t =
     Layout.of_linear
       (Group
-         [ Axis { size = tiles_m / group; stride = group * k.cluster * width }
-         ; Axis { size = tiles_n; stride = k.cluster_n }
-         ; Axis { size = group; stride = k.cluster * width }
-         ; Axis { size = k.cluster_n; stride = 1 }
-         ; Axis { size = k.cluster; stride = width }
-         ])
+         (if cluster_on_cols
+          then
+            [ Axis { size = tiles_m / group; stride = group * width }
+            ; Axis { size = tiles_n; stride = k.cluster }
+            ; Axis { size = group; stride = width }
+            ; Axis { size = k.cluster; stride = 1 }
+            ]
+          else
+            [ Axis { size = tiles_m / group; stride = group * k.cluster * width }
+            ; Axis { size = tiles_n; stride = k.cluster_n }
+            ; Axis { size = group; stride = k.cluster * width }
+            ; Axis { size = k.cluster_n; stride = 1 }
+            ; Axis { size = k.cluster; stride = width }
+            ]))
   in
   let ntiles = k.tile_m_count * k.tile_n_count in
   if not (Layout.is_bijection_onto cta_grid ~size:ntiles) then failwith "the CTA-to-tile map misses a tile";
@@ -871,16 +964,6 @@ let lower (k : kernel) : string list =
      partner only as far as the ring lets it. *)
   let grid = if total_tiles <= Dsl2.sms then total_tiles else Dsl2.sms / ctas k * ctas k in
   let persistent = grid < total_tiles in
-  (* A k loop whose tiles the ring does not divide ends part way round it,
-     with the stages it used one phase ahead of the rest; the next tile would
-     start at stage 0 regardless. Carrying the ring position across tiles is
-     not done yet, so a persistent kernel refuses that case rather than emit
-     a kernel that waits on the wrong phase. *)
-  if persistent && k.k_total / k.tile_k mod k.depth <> 0
-  then
-    failwith
-      (Printf.sprintf "ring depth %d does not divide the %d k tiles of a persistent kernel" k.depth
-         (k.k_total / k.tile_k));
   Sass.isetp_ne_u32 b p_role r_warp alloc_warp;
   Sass.bra b p_role "INIT_DONE";
   (* Fetch the tensor maps now, while the barriers are set up: the first load
@@ -975,22 +1058,35 @@ let lower (k : kernel) : string list =
            end of its role -- where it still meets the warps that use tensor
            memory and frees its own. *)
         if two_cta st && reads (function Mma _ -> true | _ -> false) body then Sass.bra b ~neg:true p_lead tl_end;
+        (* A role that runs the ring starts each tile's k loop where the last one
+           ended, so its tile loop is unrolled until the start comes round
+           again as well as the buffers: every body then has its ring position
+           at compile time. *)
+        let runs_ring = List.exists (function Kloop _ -> true | _ -> false) body in
+        let t = k.k_total / k.tile_k in
+        let period = if runs_ring && persistent then k.depth / gcd t k.depth else 1 in
+        let unroll = lcm nbuf period in
         if persistent then Sass.label b tl;
-        for buf = 0 to nbuf - 1 do
-          if buf > 0 then begin
+        for u = 0 to unroll - 1 do
+          let buf = u mod nbuf in
+          st.ring_start <- (if runs_ring then u * t mod k.depth else 0);
+          if u > 0 then begin
             Sass.isetp_lt_u32_imm b p_role r_tile total_tiles;
             Sass.bra b ~neg:true p_role tl_end
           end;
           tile_indices ();
           if uses_tmem body then buffer_base st ~buf ~into:ur_acc;
           List.iter (lower_stmt st ~stage:0 ~buf ~tx_done:(Hashtbl.create 1) ~tma_index:(ref 0)) body;
-          Sass.iadd3_c b r_tile r_tile grid
+          Sass.iadd3_c b r_tile r_tile grid;
+          (* a buffer's barrier completes once per pass over the buffers *)
+          if buf = nbuf - 1
+          then
+            List.iter
+              (fun p ->
+                if (pipe st p).per_buffer
+                then (let r = r_parity.(Hashtbl.find st.pipe_index p) in Sass.lop3_xor_imm b r r 0x80000000))
+              (List.rev (waits [] body))
         done;
-        List.iter
-          (fun p ->
-            if (pipe st p).per_buffer
-            then (let r = r_parity.(Hashtbl.find st.pipe_index p) in Sass.lop3_xor_imm b r r 0x80000000))
-          (List.rev (waits [] body));
         if persistent then begin
           Sass.isetp_lt_u32_imm b p_role r_tile total_tiles;
           Sass.bra b p_role tl

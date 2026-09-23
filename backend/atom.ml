@@ -235,17 +235,18 @@ let ldtm_block = 32
 let ldtm_32x32b ~n : (Space.thread_value, Space.logical) Layout.t =
   Layout.of_linear (Group [ Axis { size = ldtm_block; stride = n }; Axis { size = n; stride = 1 } ])
 
-(* The instruction's contract on its composite into tensor memory, domain
-   ((block row, block col), (lane, register)): one warp-uniform address per
-   block, lane l at + l << 16 and register r at + r from it, and block row w
-   inside the lanes warp w may reach. *)
-let check_ldtm ld ~blocks_m ~blocks_n ~n =
-  let at w ch l r = Layout.offset ld (Coord.Tuple [ Tuple [ Idx w; Idx ch ]; Tuple [ Idx l; Idx r ] ]) in
-  for w = 0 to blocks_m - 1 do
-    for ch = 0 to blocks_n - 1 do
+(* The instruction's contract on its composite into tensor memory. [at w ch
+   l r] is the address the composite gives lane l's register r of block
+   (w, ch), where w is the block's place among the warps' lane quarters and
+   ch its place along the load's chunks: one warp-uniform address per block,
+   lane l at + l << 16 and register r at + r from it, and block w inside the
+   lanes warp w may reach. *)
+let check_ldtm ~at ~blocks_w ~blocks_ch ~n =
+  for w = 0 to blocks_w - 1 do
+    for ch = 0 to blocks_ch - 1 do
       let base = at w ch 0 0 in
       if base lsr 16 <> ldtm_block * w
-      then failwith (pf "Atom.check_ldtm: block row %d starts at lane %d, outside the warp's quarter" w (base lsr 16));
+      then failwith (pf "Atom.check_ldtm: block %d starts at lane %d, outside the warp's quarter" w (base lsr 16));
       for l = 0 to ldtm_block - 1 do
         for r = 0 to n - 1 do
           if at w ch l r - base <> (l lsl 16) + r

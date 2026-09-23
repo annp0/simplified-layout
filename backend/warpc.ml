@@ -1,7 +1,7 @@
 let usage () =
   prerr_endline
     "usage: warpc gemm M N K                  (the configuration the measurements favour)\n\
-    \       warpc pgemm M N K DEPTH [TILE_N] [--bufs B] [--cluster X Y] [--pair]\n\
+    \       warpc pgemm M N K DEPTH [TILE_N] [--bufs B] [--cluster X Y] [--pair] [--swap] [--tile-m M]\n\
     \       warpc ptma|pepi M N K        warpc pmma M N K DEPTH\n\
     \       warpc umma M N K             (the first DSL, tcgen05)\n\
     \       warpc hmma M N K             (SM80 fragments)";
@@ -16,6 +16,8 @@ let rec options acc = function
   | "--bufs" :: b :: rest -> options { acc with Opt.bufs = Some (int b) } rest
   | "--cluster" :: x :: y :: rest -> options { acc with Opt.cluster = int x; cluster_n = int y } rest
   | "--pair" :: rest -> options { acc with Opt.pair = true } rest
+  | "--swap" :: rest -> options { acc with Opt.swap = true } rest
+  | "--tile-m" :: t :: rest -> options { acc with Opt.tile_m = int t } rest
   | _ -> usage ()
 
 let () =
@@ -38,8 +40,8 @@ let () =
     in
     let o = options Opt.default rest in
     let kernel =
-      Dsl2.gemm ~tile_n ?bufs:o.bufs ~cluster:o.cluster ~cluster_n:o.cluster_n ~pair:o.pair ~m ~n ~k:(int k)
-        ~depth:(int depth) ()
+      Dsl2.gemm ~tile_m:o.tile_m ~tile_n ?bufs:o.bufs ~cluster:o.cluster ~cluster_n:o.cluster_n ~pair:o.pair ~swap:o.swap
+        ~m ~n ~k:(int k) ~depth:(int depth) ()
     in
     List.iter print_endline (Lower2.lower kernel)
   | [ _; "ptma"; m; n; k ] -> List.iter print_endline (Lower2.lower (Dsl2.tma_probe ~m:(int m) ~n:(int n) ~k:(int k)))
