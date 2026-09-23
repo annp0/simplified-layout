@@ -117,30 +117,42 @@ them.
 ### Benchmarks
 
 fp16 inputs, fp32 accumulate, one B200. warpc runs the configuration
-`warpc gemm` chooses for the shape (below); CUTLASS is example
-70_blackwell_fp16_gemm built from source with CUDA 12.9, as shipped. The two
-alternate on the same GPU, three rounds each, 50 iterations a round, both
-timed between CUDA events on the device; the table gives the medians. Every
-warpc result equals numpy's; the inputs are integers in [-3, 3], so the fp32
-sums are exact and equality is the right test for the addressing, not a
-statement about rounding. The two are different programs (see the pair below),
-and the example's timed loop calls `gemm.initialize` on the host before every
-`gemm.run`, so its times include that call.
+`warpc gemm` chooses for the shape (below). CUTLASS is example
+70_blackwell_fp16_gemm built from source with CUDA 12.9, as shipped; its timed
+loop calls `gemm.initialize` on the host before every `gemm.run`, so its times
+include that call. cuBLAS is cuBLASLt 12.9 on the same problem (A row-major,
+B^T row-major, fp32 C, alpha 1, beta 0): every algorithm its heuristic returns
+is timed and the fastest exact one is given. The three alternate on the same
+GPU, three rounds, 50 iterations a round, timed between CUDA events on the
+device; the table gives the medians. Every warpc result equals numpy's and
+every cuBLAS result is checked exactly on sampled entries; the inputs are
+integers in [-3, 3], so the fp32 sums are exact and equality tests the
+addressing, not rounding.
 
-    shape                warpc     CUTLASS    configuration
-    1024^3               322.7       254.3    one CTA, 128 x 64
-    1536^3               694.3       533.2    two-CTA pair, 2x1
-    2048^3              1026.5      1016.9    two-CTA pair, 2x1
-    4096^3              1551.0      1519.8    two-CTA pair, 2x1
-    8192^3              1745.9      1265.9    two-CTA pair, 2x1
-    16384^3             1602.4      1263.9    one CTA, 128 x 256
-    4096x4096x1024      1090.4      1068.7    two-CTA pair, 2x1
-    3072x1280x2048       965.3       961.4    two-CTA pair, 2x1
-    8192x2048x4096      1593.9      1502.4    two-CTA pair, 2x1
+The ceiling is measured the same way: every SM issuing back-to-back
+M = 128 tcgen05 MMAs out of shared memory, with no loads and no epilogue,
+completes 8192 FLOP per clock; at the 1852 MHz the GPU holds under that load,
+148 SMs give 2243 TFLOP/s.
+
+    shape                warpc    CUTLASS     cuBLAS    warpc    cuBLAS
+                                  example              of peak  of peak
+    1024^3               326.2      253.1      314.9      15%      14%
+    1536^3               695.1      546.2      703.6      31%      31%
+    2048^3              1011.9      979.9     1044.9      45%      47%
+    4096^3              1535.5     1508.7     1719.6      68%      77%
+    4096x4096x1024      1083.5     1051.0     1194.6      48%      53%
+    3072x1280x2048       959.9      965.8      978.8      43%      44%
+    8192x2048x4096      1579.2     1481.0     1706.0      70%      76%
+    8192^3              1753.3     1255.3     1962.7      78%      88%
+    16384^3             1623.4     1271.3     1914.6      72%      85%
                                     TFLOP/s
 
-Ahead at every shape; within a per cent at 2048 cubed and 3072x1280x2048,
-where the rounds of the two overlap at the latter. The configurations:
+cuBLAS is ahead of warpc at every shape but 1024 cubed, by 8 to 18 per cent
+from 4096 cubed up. Its kernels, at the six shapes from 2048 cubed up that were
+checked with ncu, are NVIDIA's nvjet kernels, not CUTLASS's: all two-CTA, on a
+cluster of 2 or 4 (`nvjet_hss_128x256_64x6_2x1_2cta` at 8192 cubed,
+`nvjet_hss_256x256_64x4_2x1_2cta` at 16384 cubed). The CUTLASS example is
+behind warpc everywhere but 3072x1280x2048. The configurations:
 
 - **The two-CTA pair.** One MMA over a 2x1 cluster, M = 256 across the pair
   and 128 x 128 per CTA, ring depth 8, two accumulators, persistent. The pair
