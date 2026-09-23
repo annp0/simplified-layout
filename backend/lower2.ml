@@ -851,16 +851,22 @@ let lower (k : kernel) : string list =
         Sass.syncs_exch b ~base:(mbar_reg st p.pname ~stage:s ~buf:s) ~imm:0 ~v:ur_init
       done)
     k.pipes;
+  Sass.label b "INIT_DONE";
+  Sass.membar_cta b;
+  Sass.fence_view_async b;
+  Sass.bar_sync b;
+  (* The barriers are visible to every warp from here, so the producer starts
+     loading now; tensor memory is allocated meanwhile, and only the warps that
+     use it wait for it, at the start of their roles. *)
+  Sass.isetp_ne_u32 b p_role r_warp alloc_warp;
+  Sass.bra b p_role "ALLOC_DONE";
   for buf = 0 to nbuf - 1 do
     alloc_tmem ~tag:(string_of_int buf) b ~ncols:acc_cols;
     Sass.mov_ur b r_tmp ur_init;
     Sass.sts_ur b ~ur:ur_smem ~imm:(slot_off - 0x400 + (4 * buf)) ~data:r_tmp
   done;
   Sass.uvirtcount_dealloc b;
-  Sass.label b "INIT_DONE";
-  Sass.membar_cta b;
-  Sass.fence_view_async b;
-  Sass.bar_sync b;
+  Sass.label b "ALLOC_DONE";
   (* the roles whose warps touch tensor memory: the MMA's and the store's *)
   let uses_tmem body = reads (function Mma _ | Store _ | Commit _ -> true | _ -> false) body in
   let tmem_warps =
@@ -900,6 +906,9 @@ let lower (k : kernel) : string list =
           | _ -> acc
         in
         List.iter (fun (dst, src, via) -> store_setup st (store_plan st ~dst ~src ~via)) (List.fold_left stores [] body);
+        (* the tensor-memory users wait here for the allocation; the named
+           barrier also makes its slot words visible to them *)
+        if uses_tmem body then Sass.bar_sync_n b ~bar:1 ~count:(32 * tmem_warps);
         let tl = new_label st "TILES" in
         let tl_end = new_label st "TILES_END" in
         (* In a pair, the MMA and every stage barrier it waits on are the
@@ -915,7 +924,7 @@ let lower (k : kernel) : string list =
             Sass.bra b ~neg:true p_role tl_end
           end;
           tile_indices ();
-          buffer_base st ~buf ~into:ur_acc;
+          if uses_tmem body then buffer_base st ~buf ~into:ur_acc;
           List.iter (lower_stmt st ~stage:0 ~buf ~tx_done:(Hashtbl.create 1) ~tma_index:(ref 0)) body;
           Sass.iadd3_c b r_tile r_tile grid
         done;

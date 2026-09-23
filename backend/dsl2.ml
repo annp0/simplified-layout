@@ -129,6 +129,44 @@ let choose_tile_n ~m ~n ~tile_m =
     let waves = ((tiles + sms - 1) / sms) * sms in
     if 5 * tiles < 3 * waves then 128 else 256)
 
+(* The GEMM configuration the measurements favour (B200, fp16 in, fp32 out,
+   against CUTLASS 70_blackwell_fp16_gemm in the same session):
+
+   - a two-CTA MMA on a 2x1 cluster, 128 x 128 per CTA, ring depth 8: the pair
+     splits both operands, so a CTA moves the operand bytes of a 128 x 256 tile
+     while the grid has the granularity of a 128 x 128 one. It wins at every
+     measured shape but the two below; 2048^3 1020 against 1001 on one CTA,
+     4096^3 1545 against 1390, 4096x4096x1024 1086 against 968.
+   - one CTA per 128 x 256 tile, ring depth 4, when all three dimensions are
+     large: 12288^3 1486 against 1401 on the pair, 16384^3 1600 against 1414.
+     16384x16384x4096, 8192x8192x16384 and 16384x8192x8192 still prefer the
+     pair, so the rule is on the smallest dimension.
+
+   - one CTA per 128 x 64 tile, ring depth 8, when 128-wide tiles would fill
+     at most half the machine and 64-wide ones still fit in one wave: there the
+     kernel is latency, and twice the multiprocessors beat a wider tile.
+     1024^3 337 against 256 on the pair or on 128 x 128; above that the
+     narrow tile loses (2048^3 680 against 1027).
+
+   The pair needs M in pairs of 128-row tiles and a ring that divides the k
+   tiles of a persistent kernel; a shape that does not fit falls back to one
+   CTA. *)
+type config =
+  { c_tile_n : int
+  ; c_depth : int
+  ; c_cluster : int
+  ; c_pair : bool
+  }
+
+let choose ~m ~n ~k =
+  let tiles = m / 128 * (n / 128) in
+  let pair_fits = m mod 256 = 0 && n mod 128 = 0 && (tiles <= sms || k / 64 mod 8 = 0) in
+  if 2 * tiles <= sms && n mod 64 = 0 && m / 128 * (n / 64) <= sms
+  then { c_tile_n = 64; c_depth = 8; c_cluster = 1; c_pair = false }
+  else if min m (min n k) < 12288 && pair_fits
+  then { c_tile_n = 128; c_depth = 8; c_cluster = 2; c_pair = true }
+  else { c_tile_n = choose_tile_n ~m ~n ~tile_m:128; c_depth = 4; c_cluster = 1; c_pair = false }
+
 let gemm ?(tile_m = 128) ?(tile_n = 128) ?(tile_k = 64) ?bufs ?(cluster = 1) ?(cluster_n = 1) ?(pair = false)
     ~m ~n ~k ~depth () =
   let bsplit = if pair then 2 else 1 in

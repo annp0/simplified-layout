@@ -1,6 +1,7 @@
 let usage () =
   prerr_endline
-    "usage: warpc pgemm M N K DEPTH [TILE_N] [--bufs B] [--cluster X Y] [--pair]\n\
+    "usage: warpc gemm M N K                  (the configuration the measurements favour)\n\
+    \       warpc pgemm M N K DEPTH [TILE_N] [--bufs B] [--cluster X Y] [--pair]\n\
     \       warpc ptma|pepi M N K        warpc pmma M N K DEPTH\n\
     \       warpc umma M N K             (the first DSL, tcgen05)\n\
     \       warpc hmma M N K             (SM80 fragments)";
@@ -20,6 +21,14 @@ let rec options acc = function
 let () =
   match Array.to_list Sys.argv with
   | [ _; "hmma"; m; n; k ] -> List.iter print_endline (Gemm.generate ~m:(int m) ~n:(int n) ~k:(int k))
+  | [ _; "gemm"; m; n; k ] ->
+    (* the configuration the measurements favour for this shape *)
+    let m = int m and n = int n and k = int k in
+    let c = Dsl2.choose ~m ~n ~k in
+    let kernel =
+      Dsl2.gemm ~tile_n:c.c_tile_n ~cluster:c.c_cluster ~pair:c.c_pair ~m ~n ~k ~depth:c.c_depth ()
+    in
+    List.iter print_endline (Lower2.lower kernel)
   | _ :: "pgemm" :: m :: n :: k :: depth :: rest ->
     let m = int m and n = int n in
     let tile_n, rest =
