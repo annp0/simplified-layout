@@ -213,8 +213,8 @@ let gemm ?(tile_m = 128) ?(tile_n = 128) ?(tile_k = 64) ?bufs ?(cluster = 1) ?(c
       ; { pname = "free"; per_stage = false; per_buffer = true; cross = false; arrivals = 4; free_at_start = true }
       ]
   ; nwarps = 8
-    (* A cluster and a two-CTA MMA are built but not yet correct: the default
-       is a single CTA per tile. *)
+    (* the cluster and the two-CTA MMA are the caller's choice; [choose] is
+       the one the measurements favour *)
   ; cluster
   ; cluster_n
   ; pair

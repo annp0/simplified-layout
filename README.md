@@ -116,57 +116,70 @@ them.
 
 ### Benchmarks
 
-fp16 inputs, fp32 accumulate, one idle B200, 30 iterations each, measured in
-one session. CUTLASS is example 70_blackwell_fp16_gemm built from source with
-CUDA 12.9. Every warpc result equals numpy's; the inputs are integers in
-[-3, 3], so the fp32 sums are exact and equality is the right test for the
-addressing, not a statement about rounding.
+fp16 inputs, fp32 accumulate, one B200. warpc runs the configuration
+`warpc gemm` chooses for the shape (below); CUTLASS is example
+70_blackwell_fp16_gemm built from source with CUDA 12.9, as shipped. The two
+alternate on the same GPU, three rounds each, 50 iterations a round, both
+timed between CUDA events on the device; the table gives the medians. Every
+warpc result equals numpy's; the inputs are integers in [-3, 3], so the fp32
+sums are exact and equality is the right test for the addressing, not a
+statement about rounding.
 
-    shape                warpc     CUTLASS
-    1024^3               242.9       247.3
-    1536^3               647.2       538.5
-    2048^3               972.0      1017.4
-    4096^3              1327.2      1513.8
-    8192^3              1587.0      1260.2
-    16384^3             1639.2      1281.4
-    4096x4096x1024       871.1      1056.8
-    3072x1280x2048       914.8       959.2
-    8192x2048x4096      1373.2      1494.3
+    shape                warpc     CUTLASS    configuration
+    1024^3               322.7       254.3    one CTA, 128 x 64
+    1536^3               694.3       533.2    two-CTA pair, 2x1
+    2048^3              1026.5      1016.9    two-CTA pair, 2x1
+    4096^3              1551.0      1519.8    two-CTA pair, 2x1
+    8192^3              1745.9      1265.9    two-CTA pair, 2x1
+    16384^3             1602.4      1263.9    one CTA, 128 x 256
+    4096x4096x1024      1090.4      1068.7    two-CTA pair, 2x1
+    3072x1280x2048       965.3       961.4    two-CTA pair, 2x1
+    8192x2048x4096      1593.9      1502.4    two-CTA pair, 2x1
                                     TFLOP/s
 
-Ahead at 1536 cubed and from 8192 cubed up, behind elsewhere, by up to 18 per
-cent at short K. The shapes where warpc leads are the ones where CUTLASS's
-own kernel falls off (1514 at 4096 cubed, 1260 at 8192). The comparison is
-not like for like: CUTLASS runs a two-CTA MMA on a 2x2 cluster, which moves
-each operand slice once per pair of CTAs; warpc runs one CTA per tile.
+Ahead at every shape; within a per cent at 2048 cubed and 3072x1280x2048,
+where the rounds of the two overlap at the latter. The configurations:
+
+- **The two-CTA pair.** One MMA over a 2x1 cluster, M = 256 across the pair
+  and 128 x 128 per CTA, ring depth 8, two accumulators, persistent. The pair
+  splits both operands, so each CTA moves the operand bytes of a 128 x 256
+  tile while the grid has the granularity of a 128 x 128 one -- that is what
+  beats wave quantisation at 4096 cubed and short K. It is CUTLASS's own
+  schedule on a 2x1 cluster; their shipped kernel uses 2x2, which is correct
+  here too but slower.
+- **One CTA per 128 x 256 tile** when all three dimensions are 12288 or more,
+  where it beats the pair (16384^3: 1602 against 1414).
+- **One CTA per 128 x 64 tile** when 128-wide tiles would fill at most half the
+  machine: the kernel is latency there, and twice the multiprocessors win.
 
 ### What it is not yet
 
 - One program. The statements are specialised to this GEMM's instructions:
-  `Tma` is a 2-D box, `Mma` is f16, K-major, M = 128, `Store` is tensor memory
-  to a staging tile to a tensor-map store. Only the 128-byte swizzle is
-  supported, each further mode needing its own check on the device.
+  `Tma` is a 2-D box, `Mma` is f16, K-major, `Store` is tensor memory to a
+  staging tile to a tensor-map store. Only the 128-byte swizzle is supported,
+  each further mode needing its own check on the device.
 - No layout conversion. Nothing yet derives the staging and swizzle that
   take one fragment layout to another; the staging tile is declared.
-- The schedule is written, not searched. Roles, ring depth, warp assignment
-  and the tile-width rule are the program's; registers are a fixed map in
-  `lower2.ml`; `sched.ml` keeps program order and decides only stalls,
-  scoreboards and wait masks.
-- The cluster and two-CTA MMA (`--cluster X Y --pair`) run but are not
-  correct: about one value in 10^4 is wrong, in the columns the partner CTA's
-  half of B supplies, so the leader is reading that half before it lands.
-  CUTLASS's own schedule is therefore not yet transcribed, and the table
-  above is not the like-for-like comparison.
-- Shapes must be multiples of the tiles (128, and 256 or 128, and 64); there
-  is no predication for ragged edges.
+- The schedule is written, not searched. Roles, ring depth and warp
+  assignment are the program's, and `warpc gemm` picks among three measured
+  configurations by a rule fitted to the measurements above; registers are a
+  fixed map in `lower2.ml`; `sched.ml` keeps program order and decides only
+  stalls, scoreboards and wait masks.
+- A persistent kernel needs a ring depth that divides its k tiles; the ring
+  position is not yet carried across tiles, and the compiler refuses the case.
+- Shapes must be multiples of the tiles; there is no predication for ragged
+  edges.
 
 ### Running one
 
     dune build && dune test
-    ./_build/default/backend/warpc.exe pgemm 4096 4096 4096 4 > k.sass
+    ./_build/default/backend/warpc.exe gemm 4096 4096 4096 > k.sass
+    python3 backend/node/run_tma.py k.sass
 
-`warpc` writes SASS with a header naming the launch: registers, shared memory,
-grid, cluster, and a `.tmap` line per tensor map. `backend/node/sasm.py`
-assembles it into a cubin with cupatch (silares-ai/cupatch) as the encoder,
-and `backend/node/run_tma.py` encodes the tensor maps from the header,
-launches it, and checks it against numpy.
+`warpc gemm` picks the configuration; `warpc pgemm M N K DEPTH [TILE_N]
+[--bufs B] [--cluster X Y] [--pair]` states it. The output is SASS with a
+header naming the launch: registers, shared memory, grid, cluster, and a
+`.tmap` line per tensor map. `backend/node/sasm.py` assembles it into a cubin
+with cupatch (silares-ai/cupatch) as the encoder; `backend/node/run_tma.py`
+encodes the tensor maps from the header, launches it, checks it against
+numpy and times it.
