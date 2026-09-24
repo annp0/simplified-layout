@@ -145,6 +145,11 @@ type kernel =
 (* the multiprocessors of a B200 *)
 let sms = 148
 
+(* how many clusters of this many CTAs a B200 holds at once, one CTA a
+   multiprocessor: a cluster lives in one GPC, and the GPCs do not divide
+   into fours and eights evenly (cuOccupancyMaxActiveClusters, measured) *)
+let resident_clusters = function 1 -> sms | 2 -> 74 | 4 -> 33 | 8 -> 15 | c -> failwith (Printf.sprintf "resident_clusters %d" c)
+
 let choose_tile_n ~m ~n ~tile_m =
   if n mod 256 <> 0
   then 128
@@ -187,15 +192,16 @@ type config =
   ; c_swap : bool
   ; c_clc : bool
   ; c_ask_ahead : bool
+  ; c_cluster_n : int
   }
 
 let old_config ~tile_n ~depth ~cluster ~pair =
   { c_tile_m = 128; c_tile_n = tile_n; c_depth = depth; c_cluster = cluster; c_pair = pair; c_swap = false; c_clc = false
-  ; c_ask_ahead = false }
+  ; c_ask_ahead = false; c_cluster_n = 1 }
 
-let swapped ~tile_m ~tile_n ~depth ~clc ~ask_ahead =
+let swapped ?(cluster_n = 1) ~tile_m ~tile_n ~depth ~clc ~ask_ahead () =
   { c_tile_m = tile_m; c_tile_n = tile_n; c_depth = depth; c_cluster = 2; c_pair = true; c_swap = true; c_clc = clc
-  ; c_ask_ahead = ask_ahead }
+  ; c_ask_ahead = ask_ahead; c_cluster_n = cluster_n }
 
 (* cuBLAS's kernels at these shapes, transcribed (nvjet_hss_*_2cta, read from
    their SASS and their binaries' control words): a two-CTA MMA with B^T as
@@ -213,20 +219,31 @@ let swapped ~tile_m ~tile_n ~depth ~clc ~ask_ahead =
    - when 128 x 128 tiles would fill at most half the machine: the M = 128
      pair, 64 x 128 a CTA, depth 13, asking ahead (nvjet_hss_64x128_64x13):
      1024^3 4384 ns against 4960.
+   - when 128 x 128 tiles take more than one wave: 128 x 128 a CTA, depth 8,
+     2 x 2 or 2 x 4 clusters whose pairs share the tile of B^T, each CTA
+     loading a slice of it and multicasting it to the others
+     (nvjet_hss_128x128_64x9_2x2 and _2x4): 2048^3 14.18 us against 14.21,
+     3072x1280x2048 13.79 against 14.24. The wider cluster is taken when it
+     needs no more waves: fewer of them fit at once.
    The rest keep the configurations CUTLASS's example transcribed to, faster
    than cuBLAS there too: the pair on 128 x 128 tiles, depth 8 -- 1536^3 7520
-   ns against 8128, 2048^3 14.18 us against 14.69, 3072x1280x2048 14.24
-   against 14.34. *)
+   ns against 8128. *)
 let choose ~m ~n ~k =
   let tiles = m / 128 * (n / 128) in
   let pair_fits = m mod 256 = 0 && n mod 128 = 0 && (tiles <= sms || k / 64 mod 8 = 0) in
   let swapped_fits = n mod 256 = 0 && m mod 64 = 0 && k mod 64 = 0 && (m + 255) / 256 * (n / 128) >= sms in
   if swapped_fits && n mod 512 = 0 && m mod 256 = 0 && min m (min n k) >= 8192
-  then swapped ~tile_m:256 ~tile_n:256 ~depth:4 ~clc:true ~ask_ahead:true
+  then swapped ~tile_m:256 ~tile_n:256 ~depth:4 ~clc:true ~ask_ahead:true ()
   else if swapped_fits
-  then swapped ~tile_m:192 ~tile_n:128 ~depth:7 ~clc:(k >= 4096) ~ask_ahead:false
+  then swapped ~tile_m:192 ~tile_n:128 ~depth:7 ~clc:(k >= 4096) ~ask_ahead:false ()
   else if 2 * tiles <= sms && n mod 128 = 0 && m mod 128 = 0 && k mod 64 = 0
-  then swapped ~tile_m:128 ~tile_n:64 ~depth:13 ~clc:false ~ask_ahead:true
+  then swapped ~tile_m:128 ~tile_n:64 ~depth:13 ~clc:false ~ask_ahead:true ()
+  else if
+    let waves cn = if m mod (128 * cn) = 0 then Some ((tiles / (2 * cn) + resident_clusters (2 * cn) - 1) / resident_clusters (2 * cn)) else None in
+    tiles > sms && n mod 256 = 0 && k mod 64 = 0 && waves 2 <> None
+  then
+    let waves cn = if m mod (128 * cn) = 0 then (tiles / (2 * cn) + resident_clusters (2 * cn) - 1) / resident_clusters (2 * cn) else max_int in
+    swapped ~cluster_n:(if waves 4 <= waves 2 then 4 else 2) ~tile_m:128 ~tile_n:128 ~depth:8 ~clc:true ~ask_ahead:false ()
   else if min m (min n k) < 12288 && pair_fits
   then old_config ~tile_n:128 ~depth:8 ~cluster:2 ~pair:true
   else old_config ~tile_n:(choose_tile_n ~m ~n ~tile_m:128) ~depth:4 ~cluster:1 ~pair:false
@@ -319,7 +336,7 @@ let gemm ?(tile_m = 128) ?(tile_n = 128) ?(tile_k = 64) ?bufs ?(cluster = 1) ?(c
 
 (* the kernel a configuration is *)
 let of_config (c : config) ~m ~n ~k =
-  gemm ~tile_m:c.c_tile_m ~tile_n:c.c_tile_n ~cluster:c.c_cluster ~pair:c.c_pair ~swap:c.c_swap ~clc:c.c_clc
+  gemm ~tile_m:c.c_tile_m ~tile_n:c.c_tile_n ~cluster:c.c_cluster ~cluster_n:c.c_cluster_n ~pair:c.c_pair ~swap:c.c_swap ~clc:c.c_clc
     ~ask_ahead:c.c_ask_ahead ~m ~n ~k
     ~depth:c.c_depth ()
 

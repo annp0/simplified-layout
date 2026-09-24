@@ -31,6 +31,8 @@ let rec options acc = function
     options acc rest
   | "--mma-reverse" :: rest -> Lower2.mma_reverse := true; options acc rest
   | "--mma-by-step" :: rest -> Lower2.mma_by_step := true; options acc rest
+  | "--raster" :: g :: rest -> Lower2.raster_group := int g; options acc rest
+  | "--raster-n" :: g :: rest -> Lower2.raster_group := int g; Lower2.raster_along_n := true; options acc rest
   | "--tile-m" :: t :: rest -> options { acc with Opt.tile_m = int t } rest
   | _ -> usage ()
 

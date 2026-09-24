@@ -75,6 +75,8 @@ let ur_ey = 0 (* the row coordinate of this warp's blocks *)
 let ur_ex = 17 (* and the column coordinate *)
 let ur_acc_rep = 17 (* the tensor-core warp's: a stacked block's accumulator address *)
 let mma_reverse = ref false (* issue a stacked MMA's blocks last first -- for bisection *)
+let raster_group = ref 8 (* the rows of tiles consecutive CTAs walk down before moving across *)
+let raster_along_n = ref false (* walk across the columns instead *)
 let mma_by_step = ref false (* interleave a stacked MMA's blocks at every k step -- for measuring *)
 
 (* Scratch for the two operand descriptor bases of the stage being issued.
@@ -685,6 +687,40 @@ let rank_stride st ~dst ~rows =
     if off 0 <> 0 then failwith (dst ^ ": rank 0 does not load from the tile origin");
     stride
 
+(* In a cluster an operand is needed by more than one CTA: the MMA's A rows
+   by the pairs working on neighbouring blocks of the other output coordinate,
+   its B rows by the CTAs a one-CTA MMA's cluster splits A over. The CTAs of
+   such a group each load a slice of the rows and multicast it to the whole
+   group, as nvjet's do (UR8 = 0x400 + y * 0x1000, its rows 32 y on): every
+   copy lands in every CTA of the group, which is left with the whole share,
+   and the loads are spread over the group's copy engines. This is the group
+   and this CTA's place in it. *)
+let load_group st dst =
+  match mma_reading st.k dst with
+  | Some (_, `A) -> st.k.cluster_n, ur_rank_y
+  | Some (_, `B) -> (if two_cta st then 1 else st.k.cluster), ur_rank_x
+  | None -> 1, ur_rank_x
+
+(* The slice of a tile one CTA of its group loads: the first rows / group
+   rows, as a copy-engine box, and where slice j starts. The slices must be
+   that box's image at each start -- decided on every element. *)
+let load_slice (l : (Space.logical, Space.physical) Layout.t) ~elem ~group =
+  let rows, cols = Atom.dims l in
+  if rows mod group <> 0 then failwith "a tile's rows do not split over its load group";
+  let sub = rows / group in
+  let box = Atom.swizzled_rows ~rows:sub ~cols ~elem in
+  let start j = Atom.at2 l (j * sub) 0 in
+  for j = 0 to group - 1 do
+    for r = 0 to sub - 1 do
+      for c = 0 to cols - 1 do
+        if Atom.at2 l ((j * sub) + r) c <> start j + Atom.at2 box r c
+        then failwith "a slice of the tile is not the copy engine's box at its start"
+      done
+    done
+  done;
+  if group > 1 && start 1 - start 0 <> start 1 then failwith "the slices do not start a fixed stride apart from 0";
+  box, sub, (if group > 1 then start 1 else 0)
+
 (* the tensor core's commit names its barrier by a register alone: one past
    the registers is computed into a scratch register first *)
 let commit_bar st p ~stage ~buf =
@@ -749,19 +785,17 @@ let rec lower_stmt st ~stage ~buf ~(tx_done : (string, unit) Hashtbl.t) ~(tma_in
        and the copy lands at the same offset in every CTA the mask names. *)
     let operand = match mma_reading st.k dst with Some (_, w) -> w | None -> failwith (dst ^ ": no MMA reads it") in
     ignore rows;
-    let group =
-      match operand with
-      | `A -> st.k.cluster_n
-      | `B -> if two_cta st then 1 (* the pair splits B's rows, so nobody shares *) else st.k.cluster
-    in
+    let group, rank = load_group st dst in
     if grid_cluster st.k && group > 1
     then begin
-      let mask, guard = match operand with `A -> (ur_mask_a, up_issue_a) | `B -> (ur_mask_b, up_issue_b) in
+      let mask = match operand with `A -> ur_mask_a | `B -> ur_mask_b in
+      let _, _, stride = load_slice (Hashtbl.find st.layouts dst) ~elem:(elem_bytes (stile st dst).sdtype) ~group in
       Sass.uiadd3 b g ur_smem base;
+      Sass.uimad_imm b g rank stride g;
       (match bar_of p with
        | `Own (r, imm) -> Sass.uiadd3 b (g + 1) r imm
        | `Lead off -> Sass.uiadd3 b (g + 1) ur_lead off);
-      Sass.utmaldg_mc ~guard ~two:(two_cta st) b ~g ~map:(ur_param (param_index st src)) ~mask
+      Sass.utmaldg_mc ~two:(two_cta st) b ~g ~map:(ur_param (param_index st src)) ~mask
     end
     else begin
       Sass.uiadd3 b g ur_smem base;
@@ -866,10 +900,15 @@ let rec lower_stmt st ~stage ~buf ~(tx_done : (string, unit) Hashtbl.t) ~(tma_in
         let g = ur_tma.(i) in
         Sass.umov b (g + 2) 0;
         let origin = match rows with Tile_m -> ur_tile_m | Tile_n -> ur_tile_n in
-        match rank_stride st ~dst ~rows with
-        | 0 -> Sass.uiadd3 b (g + 3) origin 0
-        | stride when pow2 stride -> Sass.ulea b (g + 3) ur_rank_x origin (log2 stride)
-        | stride -> Sass.uimad_imm b (g + 3) ur_rank_x stride origin)
+        (match rank_stride st ~dst ~rows with
+         | 0 -> Sass.uiadd3 b (g + 3) origin 0
+         | stride when pow2 stride -> Sass.ulea b (g + 3) ur_rank_x origin (log2 stride)
+         | stride -> Sass.uimad_imm b (g + 3) ur_rank_x stride origin);
+        (* a slice of a multicast load starts its rank's slice of rows further *)
+        let group, rank = load_group st dst in
+        if grid_cluster st.k && group > 1
+        then (let _, sub, _ = load_slice (Hashtbl.find st.layouts dst) ~elem:(elem_bytes (stile st dst).sdtype) ~group in
+              Sass.uimad_imm b (g + 3) rank sub (g + 3)))
       tmas;
     (match tmas with
      | [] -> ()
@@ -1408,30 +1447,31 @@ let lower (k : kernel) : string list =
     if cluster_on_cols then k.tile_m_count / k.cluster_n, k.tile_n_count / k.cluster
     else k.tile_m_count / k.cluster, k.tile_n_count / k.cluster_n
   in
+  (* consecutive clusters walk [group] cluster rows down before moving across
+     -- or, rastering along N, [group] cluster columns across before moving
+     down -- so the tiles in flight share their operand rows in L2 *)
+  let along_n = !raster_along_n in
+  let walked, other = if along_n then tiles_n, tiles_m else tiles_m, tiles_n in
   let group =
-    let rec g n = if n * 2 <= tiles_m && n < 8 then g (n * 2) else n in
+    let rec g n = if n * 2 <= walked && n < !raster_group then g (n * 2) else n in
     let g = g 1 in
-    if pow2 tiles_n && tiles_m mod g = 0 then g else 1
+    if pow2 other && walked mod g = 0 then g else 1
   in
+  let cm, cn = if cluster_on_cols then k.cluster_n, k.cluster else k.cluster, k.cluster_n in
   let width = k.tile_n_count in
   let cta_grid : (Space.thread_value, Space.logical) Layout.t =
-    Layout.of_linear
-      (Group
-         (if cluster_on_cols
-          then
-            [ Axis { size = tiles_m / group; stride = group * k.cluster_n * width }
-            ; Axis { size = tiles_n; stride = k.cluster }
-            ; Axis { size = group; stride = k.cluster_n * width }
-            ; Axis { size = k.cluster_n; stride = width }
-            ; Axis { size = k.cluster; stride = 1 }
-            ]
-          else
-            [ Axis { size = tiles_m / group; stride = group * k.cluster * width }
-            ; Axis { size = tiles_n; stride = k.cluster_n }
-            ; Axis { size = group; stride = k.cluster * width }
-            ; Axis { size = k.cluster_n; stride = 1 }
-            ; Axis { size = k.cluster; stride = width }
-            ]))
+    let row = cm * width and col = cn in
+    let walk : Linear.t list =
+      if along_n
+      then [ Axis { size = tiles_n / group; stride = group * col }; Axis { size = tiles_m; stride = row }; Axis { size = group; stride = col } ]
+      else [ Axis { size = tiles_m / group; stride = group * row }; Axis { size = tiles_n; stride = col }; Axis { size = group; stride = row } ]
+    in
+    let within : Linear.t list =
+      if cluster_on_cols
+      then [ Axis { size = k.cluster_n; stride = width }; Axis { size = k.cluster; stride = 1 } ]
+      else [ Axis { size = k.cluster_n; stride = 1 }; Axis { size = k.cluster; stride = width } ]
+    in
+    Layout.of_linear (Group (walk @ within))
   in
   let ntiles = k.tile_m_count * k.tile_n_count in
   if not (Layout.is_bijection_onto cta_grid ~size:ntiles) then failwith "the CTA-to-tile map misses a tile";
@@ -1804,7 +1844,10 @@ let lower (k : kernel) : string list =
           in
           match tiles with
           | [ t ] ->
-            let bx = Atom.tma_box (Hashtbl.find layouts t) ~elem:(elem_bytes g.dtype) in
+            let l = Hashtbl.find layouts t in
+            let group, _ = if reads (function Tma { dst; _ } -> dst = t | _ -> false) k.body then load_group st t else 1, 0 in
+            let l = if grid_cluster k && group > 1 then (let box, _, _ = load_slice l ~elem:(elem_bytes g.dtype) ~group in box) else l in
+            let bx = Atom.tma_box l ~elem:(elem_bytes g.dtype) in
             Some
               (Printf.sprintf ".tmap %s %d %d %d %d %d %d" g.name g.rows g.cols bx.box_elem bx.box_rows bx.box_cols
                  bx.box_swizzle)
