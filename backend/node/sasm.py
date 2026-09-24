@@ -106,6 +106,11 @@ def assemble(path):
     def bar_reg(text):
         m = re.search(r'\[UR(\d+)', text)
         return int(m.group(1)) if m else 0xff
+    # a barrier addressed through a register, [Rn+URZ]: the entry names the
+    # register and no uniform one, as ptxas records it
+    def bar_gpr(text):
+        m = re.search(r'\[R(\d+)\+URZ\]', text)
+        return int(m.group(1)) if m else 0xff
 
     mbar_words, coop_offsets, wide_offsets = [], [], []
     for i, text in enumerate(emitted):
@@ -115,8 +120,15 @@ def assemble(path):
             kind = 0x00
         elif mnem.startswith('SYNCS.PHASECHK'):
             kind = 0x0a
+        elif mnem == 'SYNCS.ARRIVE.TRANS64.A1T0' and '+URZ]' in text:
+            # a plain local arrive; ptxas lists these (kind 1) and leaves out
+            # the expect-tx and remote (.RED) forms (ref/clcloop.ptx)
+            kind = 0x01
         if kind is not None:
-            mbar_words += [i * 16, 0xff, 0, (bar_reg(text) << 16) | 0x0100 | kind]
+            g = bar_gpr(text)
+            m = re.search(r'\[UR\d+\+0x([0-9a-f]+)\]', text)
+            imm = int(m.group(1), 16) if m else 0
+            mbar_words += [i * 16, g, imm, ((0xff if g != 0xff else bar_reg(text)) << 16) | 0x0100 | kind]
         if mnem.startswith('BAR.') or mnem.startswith('WARPSYNC'):
             coop_offsets.append(i * 16)
         if mnem.startswith('VOTEU') or mnem.startswith('REDUX'):
@@ -163,6 +175,16 @@ def assemble(path):
             def patched(*a, **k):
                 return orig(*a, **k).replace(encode_bval(0x4a, 0), encode_bval(0x4a, 0x80))
             B.kernel_info = patched
+    # A kernel that issues cluster launch control is of ISA class 2 in its
+    # compatibility section: ptxas raises EICOMPAT_ATTR_ISA_CLASS from 1 to 2
+    # for exactly that (ref/clc.ptx against ref/noclc.ptx), and without it the
+    # first wait on the barrier the answer completes is an illegal instruction.
+    uses_clc = any(t.split()[0].startswith('UGETNEXTWORKID') for t in emitted if t)
+    if uses_clc:
+        orig_compat = B.compat
+        def compat_clc(*a, **k):
+            return orig_compat(*a, **k).replace(encode_bval(0x02, 1), encode_bval(0x02, 2), 1)
+        B.compat = compat_clc
     if attrs:
         extras['extra_attrs'] = attrs
     image = b.build(num_regs=hdr['regs'], num_barriers=hdr['barriers'], params=hdr['params'], **extras)

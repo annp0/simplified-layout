@@ -30,6 +30,11 @@ let scratch = List.init 64 (fun i -> 152 + i)
 let r_parity = [| 5; 6; 7; 15 |] (* one parity register per pipe, by declaration order *)
 let r_data = [| 16; 80 |] (* two 64-register epilogue buffers *)
 let p_role = 1 and p_lane0 = 2 and p_loop = 3 and p_lead = 4
+(* cluster launch control: the parity of the answer ring's barriers, and an
+   answer's validity word *)
+let r_clc = 10 and r_clc_free = 8 and r_resp = 11
+let up_first = 4 (* the cluster's first CTA, where the scheduler runs *)
+let ur_clc = 15 (* the address of an answer, or of a barrier in another CTA, where it is used *)
 
 (* uniform registers *)
 let ur_desc = 4 and ur_param i = 8 + (2 * i)
@@ -82,6 +87,9 @@ type st =
   ; mutable max_reg : int
   ; mutable mma_seen : int (* MMAs emitted in the current loop body *)
   ; mutable ring_start : int (* the stage the k loop of the tile being emitted starts on *)
+  ; clc_full : int (* first barrier slot of the answer ring's "answered" barriers *)
+  ; clc_empty : int (* and of its "read" barriers *)
+  ; clc_resp : int (* window offset of the answers, 16 bytes each *)
   }
 
 let new_label st p = st.labels <- st.labels + 1; Printf.sprintf "%s_%d" p st.labels
@@ -139,12 +147,24 @@ let mbar_slot st p ~stage ~buf =
   let pp = pipe st p in
   Hashtbl.find st.pipe_slot p + (if pp.per_stage then stage else if pp.per_buffer then buf else 0)
 
+(* UR26-33 and UR52-62: UR63 is URZ *)
 let mbar_reg_of_slot slot =
-  if slot < 8 then 26 + slot else if slot < 20 then 52 + (slot - 8) else failwith "out of barrier registers"
+  if slot < 8 then 26 + slot else if slot < 19 then 52 + (slot - 8) else failwith "out of barrier registers"
 
 let mbar_reg st p ~stage ~buf =
   let slot = mbar_slot st p ~stage ~buf in
-  if slot < 8 then 26 + slot else if slot < 20 then 52 + (slot - 8) else failwith "out of barrier registers" 
+  mbar_reg_of_slot slot
+
+(* A barrier's address as a uniform register and an immediate: the first 19
+   slots each have a register, the rest are the last register plus 8 bytes a
+   slot -- the [UR+imm] form ptxas uses, the immediate recorded in the
+   driver's barrier table (sasm.py). UR63 is URZ, which is why there are 19. *)
+let bar_regs = 19
+
+let mbar_addr_of_slot slot =
+  if slot < bar_regs then mbar_reg_of_slot slot, 0 else mbar_reg_of_slot (bar_regs - 1), 8 * (slot - (bar_regs - 1))
+
+let mbar_addr st p ~stage ~buf = mbar_addr_of_slot (mbar_slot st p ~stage ~buf)
 (* the bytes a layout's image spans: through the last byte of the element at
    its largest offset *)
 let footprint l ~elem = elem + List.fold_left (fun m c -> max m (Layout.offset l c)) 0 (Coord.enumerate (Layout.shape l))
@@ -200,7 +220,8 @@ let lower_wait st p ~stage ~buf =
   let r = r_parity.(Hashtbl.find st.pipe_index p) in
   let l = new_label st "WAIT" in
   Sass.label st.b l;
-  Sass.syncs_trywait st.b 0 ~base:(mbar_reg st p ~stage ~buf) ~imm:0 ~parity_reg:(Some r);
+  let base, imm = mbar_addr st p ~stage ~buf in
+  Sass.syncs_trywait st.b 0 ~base ~imm ~parity_reg:(Some r);
   Sass.bra st.b ~neg:true 0 l;
 
   (* a barrier used once per tile completes a phase here; one used once per
@@ -250,7 +271,8 @@ let split ~name ~rt ~n f =
   e, Array.init n imm
 
 let release_to_pair st p ~stage ~buf =
-  Sass.syncs_arrive st.b ~guard:p_lane0 ~base:(mbar_reg st p ~stage ~buf) ~imm:0;
+  (let base, imm = mbar_addr st p ~stage ~buf in
+   Sass.syncs_arrive st.b ~guard:p_lane0 ~base ~imm);
   if two_cta st && not (pipe st p).cross
   then begin
     Sass.uiadd3 st.b ur_peer_bar ur_peer (8 * mbar_slot st p ~stage ~buf);
@@ -480,6 +502,15 @@ let rank_stride st ~dst ~rows =
     if off 0 <> 0 then failwith (dst ^ ": rank 0 does not load from the tile origin");
     stride
 
+(* the tensor core's commit names its barrier by a register alone: one past
+   the registers is computed into a scratch register first *)
+let commit_bar st p ~stage ~buf =
+  match mbar_addr st p ~stage ~buf with
+  | r, 0 -> r
+  | r, imm ->
+    Sass.uiadd3 st.b ur_tmp r imm;
+    ur_tmp
+
 let rec lower_stmt st ~stage ~buf ~(tx_done : (string, unit) Hashtbl.t) ~(tma_index : int ref) = function
   | Wait p -> lower_wait st p ~stage ~buf
   | Tma { dst; src; rows; pipe = p } ->
@@ -489,17 +520,19 @@ let rec lower_stmt st ~stage ~buf ~(tx_done : (string, unit) Hashtbl.t) ~(tma_in
        copy of the barrier -- the CTA field of its address with the pair bit
        cleared, as CUTLASS masks it (0xfefffff8) -- and the leader alone states
        the bytes to expect, the pair's whole stage. *)
-    let bar_of p = if two_cta st then `Lead (8 * mbar_slot st p ~stage ~buf) else `Own (mbar_reg st p ~stage ~buf) in
+    let bar_of p = if two_cta st then `Lead (8 * mbar_slot st p ~stage ~buf) else `Own (mbar_addr st p ~stage ~buf) in
     if not (Hashtbl.mem tx_done p) then begin
       Hashtbl.replace tx_done p ();
       if two_cta st
       then begin
         let l = new_label st "NOT_LEADER" in
         Sass.bra b ~neg:true p_lead l;
-        Sass.syncs_arrive_tx b ~guard:p_lane0 ~base:(mbar_reg st p ~stage ~buf) ~imm:0 ~tx:r_tmp2;
+        (let base, imm = mbar_addr st p ~stage ~buf in
+         Sass.syncs_arrive_tx b ~guard:p_lane0 ~base ~imm ~tx:r_tmp2);
         Sass.label b l
       end
-      else Sass.syncs_arrive_tx b ~guard:p_lane0 ~base:(mbar_reg st p ~stage ~buf) ~imm:0 ~tx:r_tmp2
+      else (let base, imm = mbar_addr st p ~stage ~buf in
+            Sass.syncs_arrive_tx b ~guard:p_lane0 ~base ~imm ~tx:r_tmp2)
     end;
     let g = ur_tma.(!tma_index) in
     incr tma_index;
@@ -520,14 +553,14 @@ let rec lower_stmt st ~stage ~buf ~(tx_done : (string, unit) Hashtbl.t) ~(tma_in
       let mask, guard = match rows with Tile_m -> (ur_mask_a, up_issue_a) | Tile_n -> (ur_mask_b, up_issue_b) in
       Sass.uiadd3 b g ur_smem base;
       (match bar_of p with
-       | `Own r -> Sass.uiadd3 b (g + 1) r 0
+       | `Own (r, imm) -> Sass.uiadd3 b (g + 1) r imm
        | `Lead off -> Sass.uiadd3 b (g + 1) ur_lead off);
       Sass.utmaldg_mc ~guard ~two:(two_cta st) b ~g ~map:(ur_param (param_index st src)) ~mask
     end
     else begin
       Sass.uiadd3 b g ur_smem base;
       (match bar_of p with
-       | `Own r -> Sass.uiadd3 b (g + 1) r 0
+       | `Own (r, imm) -> Sass.uiadd3 b (g + 1) r imm
        | `Lead off -> Sass.uiadd3 b (g + 1) ur_lead off);
       Sass.utmaldg ~two:(two_cta st) b ~g ~map:(ur_param (param_index st src))
     end;
@@ -575,10 +608,10 @@ let rec lower_stmt st ~stage ~buf ~(tx_done : (string, unit) Hashtbl.t) ~(tma_in
        split its rows over, which is the pair. *)
     let mask = if (pipe st p).cross then ur_mask_plain else ur_mask_b_plain in
     if two_cta st
-    then Sass.utcbar2_mc st.b ~guard:up_leader ~mbar:(mbar_reg st p ~stage ~buf) ~mask
+    then Sass.utcbar2_mc st.b ~guard:up_leader ~mbar:(commit_bar st p ~stage ~buf) ~mask
     else if (pipe st p).cross && grid_cluster st.k
-    then Sass.utcbar_mc st.b ~mbar:(mbar_reg st p ~stage ~buf) ~mask
-    else Sass.utcbar st.b ~mbar:(mbar_reg st p ~stage ~buf)
+    then Sass.utcbar_mc st.b ~mbar:(commit_bar st p ~stage ~buf) ~mask
+    else Sass.utcbar st.b ~mbar:(commit_bar st p ~stage ~buf)
   | Signal p -> release_to_pair st p ~stage ~buf
   | Store { dst; src; via; release } -> store_body st (store_plan st ~dst ~src ~via) ~release ~buf
   | Kloop body ->
@@ -673,6 +706,7 @@ let rec lower_stmt st ~stage ~buf ~(tx_done : (string, unit) Hashtbl.t) ~(tma_in
       emit_stage stage
     done
   | Role _ -> failwith "nested role"
+  | Schedule -> failwith "the scheduler is a role of its own"
 
 (* Free [ncols] tensor-memory columns allocated at address [base]: clear
    their 32-column chunks and the allocation's start bit, 16 above its first
@@ -726,6 +760,161 @@ let dealloc st =
     free_tmem st.b ~base:ur_acc ~ncols:(Atom.tmem_columns acc.tcols)
   done
 
+(* ---- cluster launch control ---- *)
+
+(* The answer ring's barriers are addressed through a register, [Rn+URZ], as
+   ptxas addresses barriers it indexes at run time: a uniform register that
+   names different barriers at different points is refused by the device
+   (an illegal instruction at the barrier operation, found by bisection). *)
+let r_clc_addr = 9 and r_clc_ans = 20 (* the answer, four registers *)
+
+(* how the CLC code addresses its barriers and reads its answer -- switches
+   for bisecting it on the device *)
+type clc_style =
+  { gpr_bars : bool (* barriers as [Rn+URZ], else each slot's own uniform register *)
+  ; wide : bool (* the answer by one LDS.128, else word by word *)
+  ; cluster_ops : bool (* the request's operands as shared::cluster addresses, else window offsets *)
+  }
+
+(* Measured on the device with the tile-loop probe (warpc pclcloop): the
+   answer must be read by one 128-bit load -- word by word, a taker sees no
+   cluster where there was one and ~half the tiles are never done -- and the
+   request's operands must be window offsets: as shared::cluster addresses
+   the request never completes. The barriers work either way. *)
+let clc_style = ref { gpr_bars = true; wide = true; cluster_ops = false }
+
+(* this CTA's copy of a window offset, as a shared::cluster address *)
+let local_addr st ~dst off =
+  Sass.mov_ur st.b dst ur_smem;
+  Sass.iadd3_c st.b dst dst (off - 0x400)
+
+(* the window offset of a barrier slot *)
+let slot_bar slot = 0x400 + (8 * slot)
+
+(* wait on this CTA's barrier in [slot] *)
+let wait_slot st ~addr ~slot ~parity =
+  let l = new_label st "WAIT" in
+  if !clc_style.gpr_bars then local_addr st ~dst:addr (slot_bar slot);
+  Sass.label st.b l;
+  if !clc_style.gpr_bars
+  then Sass.syncs_trywait_r st.b 0 ~addr ~parity
+  else (let base, imm = mbar_addr_of_slot slot in
+        Sass.syncs_trywait st.b 0 ~base ~imm ~parity_reg:(Some parity));
+  Sass.bra st.b ~neg:true 0 l
+
+(* read the answer at window offset [off]: its first word to [first], its
+   validity bit to [valid] *)
+let read_answer st ~addr ~off ~first ~valid =
+  let b = st.b in
+  if !clc_style.wide
+  then begin
+    local_addr st ~dst:addr off;
+    Sass.lds128_r b r_clc_ans ~addr;
+    (match first with Some r -> Sass.mov_rr b r r_clc_ans | None -> ());
+    Sass.lop3_and b valid (r_clc_ans + 2) 1
+  end
+  else begin
+    Sass.uiadd3 b ur_clc ur_smem (off - 0x400);
+    (match first with Some r -> Sass.lds b r ~ur:ur_clc ~imm:0 | None -> ());
+    Sass.lds b valid ~ur:ur_clc ~imm:8;
+    Sass.lop3_and b valid valid 1
+  end
+
+(* The next tile, from the answer in ring slot [slot]: wait for it, read the
+   first CTA of the cluster it cancelled and whether there was one, and give
+   the slot back to the scheduler, whose barrier is in the cluster's first
+   CTA. The tile is that cluster's CTA of this CTA's rank. *)
+let clc_take st ~slot ~last ~tl_end =
+  let b = st.b and n_ctas = ctas st.k in
+  wait_slot st ~addr:r_clc_addr ~slot:(st.clc_full + slot) ~parity:r_clc;
+  read_answer st ~addr:r_clc_addr ~off:(st.clc_resp + (16 * slot)) ~first:(Some r_tile) ~valid:r_resp;
+  if n_ctas > 1 then Sass.lea_ur b r_tile r_tile ur_rank_x 0;
+  if n_ctas > 1
+  then begin
+    (* the CTA field of a shared::cluster address is the rank: 0 is the first *)
+    Sass.mov_imm b r_clc_addr (slot_bar (st.clc_empty + slot));
+    Sass.syncs_arrive_red_r b ~guard:p_lane0 ~addr:r_clc_addr
+  end
+  else if !clc_style.gpr_bars
+  then begin
+    local_addr st ~dst:r_clc_addr (slot_bar (st.clc_empty + slot));
+    Sass.syncs_arrive_r b ~guard:p_lane0 ~addr:r_clc_addr
+  end
+  else (let base, imm = mbar_addr_of_slot (st.clc_empty + slot) in
+        Sass.syncs_arrive b ~guard:p_lane0 ~base ~imm);
+  (* the ring's barriers complete a phase per pass over its slots *)
+  if last then Sass.lop3_xor_imm b r_clc r_clc 0x80000000;
+  Sass.isetp_eq_u32 b p_role r_resp 0;
+  Sass.bra b p_role tl_end
+
+(* The scheduler, in the cluster's first CTA: for each slot of the ring, once
+   every warp that takes tiles has read the slot's last answer, state the 16
+   bytes of the next one on each CTA's copy of the slot, cancel a cluster not
+   yet launched (the answer is broadcast to the whole cluster), and read the
+   answer too: when there was no cluster left, wait until the takers have
+   read that answer and stop. *)
+let r_sched_tx = 12 and r_sched_addr = 13
+
+let schedule st ~role_end =
+  let b = st.b and k = st.k in
+  let n = match k.tiles with Clc n -> n | Stride -> failwith "Schedule: this kernel takes its tiles by stride" in
+  let n_ctas = ctas k in
+  if n_ctas > 1 then begin
+    Sass.uisetp_eq0 b up_first ur_cta;
+    Sass.plop3_up b p_loop ~up:up_first;
+    Sass.bra b ~neg:true p_loop role_end
+  end;
+  Sass.mov_imm b r_clc_free 0x80000000;
+  Sass.mov_imm b r_clc 0;
+  Sass.mov_imm b r_sched_tx 16;
+  let top = new_label st "SCHED" and stop = new_label st "SCHED_END" in
+  let drains = List.init n (fun _ -> new_label st "SCHED_LAST") in
+  Sass.label b top;
+  for s = 0 to n - 1 do
+    wait_slot st ~addr:r_sched_addr ~slot:(st.clc_empty + s) ~parity:r_clc_free;
+    for v = 0 to n_ctas - 1 do
+      if n_ctas > 1
+      then begin
+        Sass.mov_imm b r_sched_addr ((v lsl 24) + slot_bar (st.clc_full + s));
+        Sass.syncs_arrive_tx_red_r b ~guard:p_lane0 ~addr:r_sched_addr ~tx:r_sched_tx
+      end
+      else if !clc_style.gpr_bars
+      then begin
+        local_addr st ~dst:r_sched_addr (slot_bar (st.clc_full + s));
+        Sass.syncs_arrive_tx_r b ~guard:p_lane0 ~addr:r_sched_addr ~tx:r_sched_tx
+      end
+      else (let base, imm = mbar_addr_of_slot (st.clc_full + s) in
+            Sass.syncs_arrive_tx b ~guard:p_lane0 ~base ~imm ~tx:r_sched_tx)
+    done;
+    if !clc_style.cluster_ops
+    then begin
+      Sass.uiadd3 b ur_st ur_smem (st.clc_resp - 0x400 + (16 * s));
+      Sass.uiadd3 b (ur_st + 1) ur_smem (8 * (st.clc_full + s))
+    end
+    else begin
+      Sass.umov b ur_st (st.clc_resp + (16 * s));
+      Sass.umov b (ur_st + 1) (slot_bar (st.clc_full + s))
+    end;
+    (* a uniform instruction: the warp issues it once *)
+    Sass.warpsync b;
+    Sass.ugetnextworkid b ~resp:ur_st ~mbar:(ur_st + 1);
+    wait_slot st ~addr:r_sched_addr ~slot:(st.clc_full + s) ~parity:r_clc;
+    read_answer st ~addr:r_sched_addr ~off:(st.clc_resp + (16 * s)) ~first:None ~valid:r_resp;
+    Sass.isetp_eq_u32 b p_loop r_resp 0;
+    Sass.bra b p_loop (List.nth drains s)
+  done;
+  Sass.lop3_xor_imm b r_clc_free r_clc_free 0x80000000;
+  Sass.lop3_xor_imm b r_clc r_clc 0x80000000;
+  Sass.jmp b top;
+  List.iteri
+    (fun s l ->
+      Sass.label b l;
+      Sass.lop3_xor_imm b r_clc_free r_clc_free 0x80000000;
+      wait_slot st ~addr:r_sched_addr ~slot:(st.clc_empty + s) ~parity:r_clc_free;
+      Sass.jmp b stop)
+    drains;
+  Sass.label b stop
+
 (* A probe of the allocator alone: warp 0 allocates [ncols] columns, gives up
    its permit, frees them and exits -- the GEMM's instructions and nothing
    else, so a launch that follows shows whether the free left anything. *)
@@ -752,6 +941,80 @@ let tmem_probe ~ncols ~times =
   ; ".smem 1024"; ".mbarriers 1"; ".tcgen05"; ".params 8" ]
   @ Sched.schedule (Sass.items b)
 
+(* A probe of the tile loop under cluster launch control, with this
+   compiler's own scheduler and take: warp 0 takes tiles -- its first is its
+   CTA's -- and writes its CTA's id + 1 to out[tile] for each; warp 2 is the
+   scheduler. Every tile must be written exactly by the CTA that took it. *)
+let clc_loop_probe ~first () =
+  let b = Sass.create () in
+  let k =
+    { (Dsl2.gemm ~m:128 ~n:128 ~k:64 ~depth:1 ()) with
+      tiles = Clc 2; body = [ Role ([ 0 ], []); Role ([ 2 ], [ Schedule ]) ] }
+  in
+  let st =
+    { b; k; pipe_slot = Hashtbl.create 1; pipe_index = Hashtbl.create 1; smem_dyn = Hashtbl.create 1; stage_bytes = 0
+    ; slot_off = 0x420; labels = 0; max_reg = 32; mma_seen = 0; ring_start = 0; smem_base = ur_smem; epi_off = 0
+    ; layouts = Hashtbl.create 1; copy_bytes = Hashtbl.create 1; clc_full = first; clc_empty = first + 2
+    ; clc_resp = 0x400 + (8 * (first + 4)) + 16 }
+  in
+  Sass.ldc b 1 0x37c;
+  Sass.s2r_tid b r_tid;
+  Sass.s2r_ctaid b r_tile ~axis:"X";
+  Sass.mov_rr b 12 r_tile;
+  Sass.ldcu64 b ur_desc 0x358;
+  Sass.ldcu64 b (ur_param 0) 0x380;
+  Sass.shf_r b r_warp r_tid 5;
+  Sass.lop3_and b r_lane r_tid 31;
+  Sass.isetp_eq_u32 b p_lane0 r_lane 0;
+  Sass.s2ur_cta b ur_cta;
+  Sass.umov b ur_tmp 0x400;
+  Sass.ulea b ur_smem ur_cta ur_tmp 0x18;
+  for i = 0 to first + 3 do
+    Sass.uiadd3 b (mbar_reg_of_slot i) ur_smem (8 * i)
+  done;
+  Sass.isetp_ne_u32 b p_role r_warp 1;
+  Sass.bra b p_role "INIT_DONE";
+  List.iter
+    (fun (first, arrivals) ->
+      Sass.umov b ur_init arrivals;
+      Sass.uiadd3_neg b ur_init ur_init 0x100000;
+      Sass.ushf_l b (ur_init + 1) ur_init 0xb;
+      Sass.ushf_l b ur_init ur_init 0x1;
+      for s = 0 to 1 do
+        Sass.uiadd3 b ur_clc ur_smem (8 * (first + s));
+        Sass.syncs_exch b ~base:ur_clc ~imm:0 ~v:ur_init
+      done)
+    [ first, 1; first + 2, 1 ];
+  Sass.label b "INIT_DONE";
+  Sass.membar_cta b;
+  Sass.fence_view_async b;
+  Sass.bar_sync b;
+  (* warp 0 *)
+  Sass.isetp_ne_u32 b p_role r_warp 0;
+  Sass.bra b p_role "NOT_TAKER";
+  Sass.mov_imm b r_clc 0;
+  Sass.label b "TILES";
+  for u = 0 to 1 do
+    Sass.mov_ur b 20 (ur_param 0);
+    Sass.mov_ur b 21 (ur_param 0 + 1);
+    Sass.imad_wide b 20 r_tile 4 20;
+    Sass.iadd3_c b 22 12 1;
+    Sass.stg32 b ~base:20 ~imm:0 ~data:22;
+    clc_take st ~slot:u ~last:(u = 1) ~tl_end:"TILES_END"
+  done;
+  Sass.jmp b "TILES";
+  Sass.label b "TILES_END";
+  Sass.exit b;
+  Sass.label b "NOT_TAKER";
+  Sass.isetp_ne_u32 b p_role r_warp 2;
+  Sass.bra b p_role "IDLE";
+  schedule st ~role_end:"IDLE";
+  Sass.label b "IDLE";
+  Sass.exit b;
+  [ ".kernel clc"; ".sm sm_100a"; ".regs 40"; ".barriers 1"; ".threads 96"; ".smem 1024"
+  ; Printf.sprintf ".mbarriers %d" (first + 4); ".params 8" ]
+  @ Sched.schedule (Sass.items b)
+
 let lower (k : kernel) : string list =
   let b = Sass.create () in
   let nthreads = 32 * k.nwarps in
@@ -765,10 +1028,18 @@ let lower (k : kernel) : string list =
       Hashtbl.replace pipe_slot p.pname !nslots;
       nslots := !nslots + (if p.per_stage then k.depth else if p.per_buffer then nbuf else 1))
     k.pipes;
-  if !nslots > 20 then failwith "too many mbarriers for the uniform register map";
+
+  (* the pipes' barriers each have a uniform register; the answer ring's are
+     addressed where they are used, once a tile *)
+
+  let clc_slots = match k.tiles with Clc n -> n | Stride -> 0 in
+  let clc_full = !nslots in
+  let clc_empty = clc_full + clc_slots in
+  nslots := !nslots + (2 * clc_slots);
   let slot_off = 0x400 + (8 * !nslots) in
   let static_bytes = 0x400 in
-  if slot_off + (4 * nbuf) > 0x400 + static_bytes then failwith "static shared memory overflow";
+  let clc_resp = round_up (slot_off + (4 * nbuf)) 16 in
+  if clc_resp + (16 * clc_slots) > 0x400 + static_bytes then failwith "static shared memory overflow";
   (* offsets below are relative to the smem base register, which sits at window
      offset 0x400; the dynamic region begins right after the static bytes *)
   let dyn_base = static_bytes in
@@ -820,7 +1091,7 @@ let lower (k : kernel) : string list =
   if acc_cols * nbuf > 512 then failwith "tmem columns";
   let st =
     { b; k; pipe_slot; pipe_index; smem_dyn; stage_bytes; slot_off; labels = 0; max_reg = r_data.(1) + 63; mma_seen = 0
-    ; ring_start = 0
+    ; ring_start = 0; clc_full; clc_empty; clc_resp
     ; smem_base = ur_smem; epi_off = dyn_base + (stage_bytes * k.depth); layouts; copy_bytes }
   in
   (* a store's warps read tensor memory through their lane quarters, so they
@@ -942,8 +1213,14 @@ let lower (k : kernel) : string list =
     Sass.uisetp_eq0 b up_issue_a ur_rank_y
   end;
 
-  for i = 0 to !nslots - 1 do
-    Sass.uiadd3 b (if i < 8 then 26 + i else 52 + (i - 8)) ur_smem (8 * i)
+  (* A uniform register a barrier operation names holds that barrier's
+     address for the whole kernel: the device refuses an operation on a
+     barrier through a register that has named another one, or served as
+     scratch (an illegal instruction, found by bisection). So every slot's
+     register is set here once, and a barrier addressed at run time goes
+     through a general register instead. *)
+  for i = 0 to min !nslots bar_regs - 1 do
+    Sass.uiadd3 b (mbar_reg_of_slot i) ur_smem (8 * i)
   done;
   (* the allocating warp: mbarrier inits, TMEM *)
   let signalled name =
@@ -963,8 +1240,11 @@ let lower (k : kernel) : string list =
      same cluster tile at every step -- and the stage and accumulator
      handshakes span the tile boundaries, so a CTA can be a tile ahead of its
      partner only as far as the ring lets it. *)
-  let grid = if total_tiles <= Dsl2.sms then total_tiles else Dsl2.sms / ctas k * ctas k in
-  let persistent = grid < total_tiles in
+  let clc = clc_slots > 0 in
+  let grid = if clc || total_tiles <= Dsl2.sms then total_tiles else Dsl2.sms / ctas k * ctas k in
+  (* with cluster launch control every CTA takes tiles until the scheduler
+     finds none left *)
+  let persistent = clc || grid < total_tiles in
   Sass.isetp_ne_u32 b p_role r_warp alloc_warp;
   Sass.bra b p_role "INIT_DONE";
   (* Fetch the tensor maps now, while the barriers are set up: the first load
@@ -990,13 +1270,44 @@ let lower (k : kernel) : string list =
       Sass.ushf_l b ur_init ur_init 0x1;
       let n = if p.per_stage then k.depth else if p.per_buffer then nbuf else 1 in
       for s = 0 to n - 1 do
-        Sass.syncs_exch b ~base:(mbar_reg st p.pname ~stage:s ~buf:s) ~imm:0 ~v:ur_init
+        (let base, imm = mbar_addr st p.pname ~stage:s ~buf:s in
+         Sass.syncs_exch b ~base ~imm ~v:ur_init)
       done)
     k.pipes;
+  if clc then begin
+    (* An answer is awaited by one arrival -- the scheduler's, stating the 16
+       bytes to come -- and read by every warp that takes tiles, across the
+       cluster: in a pair only the leader's tensor-core warp takes them. *)
+    let takers =
+      List.fold_left
+        (fun acc s ->
+          match s with
+          | Role (ws, body) when not (List.mem Schedule body) ->
+            let ctas_taking = if two_cta st && reads (function Mma _ -> true | _ -> false) body then 1 else ctas k in
+            acc + (List.length ws * ctas_taking)
+          | _ -> acc)
+        0 k.body
+    in
+    List.iter
+      (fun (first, arrivals) ->
+        Sass.umov b ur_init arrivals;
+        Sass.uiadd3_neg b ur_init ur_init 0x100000;
+        Sass.ushf_l b (ur_init + 1) ur_init 0xb;
+        Sass.ushf_l b ur_init ur_init 0x1;
+        for s = 0 to clc_slots - 1 do
+          let base, imm = mbar_addr_of_slot (first + s) in
+          Sass.syncs_exch b ~base ~imm ~v:ur_init
+        done)
+      [ clc_full, 1; clc_empty, takers ]
+  end;
   Sass.label b "INIT_DONE";
   Sass.membar_cta b;
   Sass.fence_view_async b;
   Sass.bar_sync b;
+  (* A CTA arrives on its partners' barriers, so none may start before every
+     CTA of the cluster has initialised its own: the cluster meets here, as
+     nvjet's kernels do (UCGABAR_ARV / UCGABAR_WAIT after the inits). *)
+  if grid_cluster k then Sass.cluster_sync b;
   (* The barriers are visible to every warp from here, so the producer starts
      loading now; tensor memory is allocated meanwhile, and only the warps that
      use it wait for it, at the start of their roles. *)
@@ -1019,6 +1330,20 @@ let lower (k : kernel) : string list =
   (* roles *)
   List.iter
     (function
+      | Role (ws, body) when List.mem Schedule body ->
+        if body <> [ Schedule ] then failwith "the scheduler's role does nothing else";
+        let skip = new_label st "ROLE_END" in
+        let lo = List.fold_left min max_int ws and hi = List.fold_left max min_int ws in
+        if lo <> hi then failwith "the scheduler is one warp";
+        if lo > 0 then begin Sass.isetp_lt_u32_imm b p_role r_warp lo; Sass.bra b p_role skip end;
+        Sass.isetp_lt_u32_imm b p_role r_warp (hi + 1);
+        Sass.bra b ~neg:true p_role skip;
+        let done_ = new_label st "SCHED_DONE" in
+        schedule st ~role_end:done_;
+        Sass.label b done_;
+        if grid_cluster k then Sass.cluster_barrier b;
+        Sass.exit b;
+        Sass.label b skip
       | Role (ws, body) ->
         let skip = new_label st "ROLE_END" in
         let lo = List.fold_left min max_int ws and hi = List.fold_left max min_int ws in
@@ -1037,6 +1362,8 @@ let lower (k : kernel) : string list =
         List.iter
           (fun p -> Sass.mov_imm b r_parity.(Hashtbl.find st.pipe_index p) (if (pipe st p).free_at_start then 0x80000000 else 0))
           (List.rev (waits [] body));
+        (* a role that takes its tiles from the scheduler waits for its first answer *)
+        if clc then Sass.mov_imm b r_clc 0;
         (* One pass of the tile loop covers one accumulator buffer each, so a
            barrier belonging to a buffer completes exactly once per pass, and
            its parity flips once per pass like a stage barrier. A CTA that runs
@@ -1066,19 +1393,23 @@ let lower (k : kernel) : string list =
         let runs_ring = List.exists (function Kloop _ -> true | _ -> false) body in
         let t = k.k_total / k.tile_k in
         let period = if runs_ring && persistent then k.depth / gcd t k.depth else 1 in
-        let unroll = lcm nbuf period in
+        (* and, taking tiles from the scheduler, until the answer ring's slot
+           comes round *)
+        let unroll = lcm (lcm nbuf period) (max 1 clc_slots) in
         if persistent then Sass.label b tl;
         for u = 0 to unroll - 1 do
           let buf = u mod nbuf in
           st.ring_start <- (if runs_ring then u * t mod k.depth else 0);
-          if u > 0 then begin
+          if u > 0 && not clc then begin
             Sass.isetp_lt_u32_imm b p_role r_tile total_tiles;
             Sass.bra b ~neg:true p_role tl_end
           end;
           tile_indices ();
           if uses_tmem body then buffer_base st ~buf ~into:ur_acc;
           List.iter (lower_stmt st ~stage:0 ~buf ~tx_done:(Hashtbl.create 1) ~tma_index:(ref 0)) body;
-          Sass.iadd3_c b r_tile r_tile grid;
+          if clc
+          then clc_take st ~slot:(u mod clc_slots) ~last:(u mod clc_slots = clc_slots - 1) ~tl_end
+          else Sass.iadd3_c b r_tile r_tile grid;
           (* a buffer's barrier completes once per pass over the buffers *)
           if buf = nbuf - 1
           then
@@ -1088,10 +1419,12 @@ let lower (k : kernel) : string list =
                 then (let r = r_parity.(Hashtbl.find st.pipe_index p) in Sass.lop3_xor_imm b r r 0x80000000))
               (List.rev (waits [] body))
         done;
-        if persistent then begin
-          Sass.isetp_lt_u32_imm b p_role r_tile total_tiles;
-          Sass.bra b p_role tl
-        end;
+        if persistent then
+          if clc then Sass.jmp b tl
+          else begin
+            Sass.isetp_lt_u32_imm b p_role r_tile total_tiles;
+            Sass.bra b p_role tl
+          end;
         Sass.label b tl_end;
         (* Tensor memory is freed only once nothing can touch it: the MMAs have
            completed and every warp that reads the accumulator has read it.

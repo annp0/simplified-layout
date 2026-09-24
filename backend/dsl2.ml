@@ -89,8 +89,21 @@ type stmt =
              [via], and the copy engine stores that to [dst] *)
       ; release : string option (* signalled once the accumulator has been read *)
       }
+  | Schedule
+      (* the tile scheduler: take the tiles of clusters that have not been
+         launched yet (cluster launch control) and hand them to every role
+         of the cluster *)
   | Kloop of stmt list
   | Role of int list * stmt list
+
+(* How a CTA finds its tiles. [Stride]: a grid of one CTA per multiprocessor,
+   each walking the tiles a grid apart. [Clc n]: a grid of every tile, the
+   first cluster's scheduler cancelling clusters not yet launched and taking
+   their tiles, its answers in a ring of [n] slots every role of the cluster
+   reads -- how CUTLASS's and cuBLAS's Blackwell kernels are persistent. *)
+type tiles =
+  | Stride
+  | Clc of int
 
 type kernel =
   { name : string
@@ -102,6 +115,7 @@ type kernel =
   ; nwarps : int
   ; cluster : int (* CTAs along M: the CTAs one MMA spans *)
   ; cluster_n : int (* CTAs along N: the groups that share the same operand rows *)
+  ; tiles : tiles
   ; tile_m : int
   ; tile_n : int
   ; tile_k : int
@@ -171,7 +185,7 @@ let choose ~m ~n ~k =
   else { c_tile_n = choose_tile_n ~m ~n ~tile_m:128; c_depth = 4; c_cluster = 1; c_pair = false }
 
 let gemm ?(tile_m = 128) ?(tile_n = 128) ?(tile_k = 64) ?bufs ?(cluster = 1) ?(cluster_n = 1) ?(pair = false)
-    ?(swap = false) ~m ~n ~k ~depth () =
+    ?(swap = false) ?(clc = false) ~m ~n ~k ~depth () =
   (* One instruction per 16 columns of K: M rows over the CTAs it spans, N the
      accumulator's columns. [pair] asks for the CTA-pair form. [swap] makes the
      MMA's A operand the tile of B^T, as cuBLAS's nvjet kernels do: the
@@ -235,6 +249,7 @@ let gemm ?(tile_m = 128) ?(tile_n = 128) ?(tile_k = 64) ?bufs ?(cluster = 1) ?(c
        the one the measurements favour *)
   ; cluster
   ; cluster_n
+  ; tiles = (if clc then Clc 2 else Stride)
   ; tile_m; tile_n; tile_k; k_total = k; tile_m_count = (m + tile_m - 1) / tile_m
   ; tile_n_count = (n + tile_n - 1) / tile_n
   ; body =
@@ -244,6 +259,7 @@ let gemm ?(tile_m = 128) ?(tile_n = 128) ?(tile_k = 64) ?bufs ?(cluster = 1) ?(c
           , [ Wait "free"; Kloop [ Wait "full"; Mma { atom; d = "acc"; a = a_tile; b = b_tile }; Commit "empty" ]; Commit "ready" ] )
       ; Role ([ 4; 5; 6; 7 ], [ Wait "ready"; Store { dst = "c"; src = "acc"; via = "sc"; release = Some "free" } ])
       ]
+      @ if clc then [ Role ([ 2 ], [ Schedule ]) ] else []
   }
 
 (* a probe keeps only the shared tiles its body touches: a tile nothing reads
@@ -307,6 +323,7 @@ let rec stmt_string ind = function
   | Mma { atom; d; a; b } -> Printf.sprintf "%s%s += %s[stage] . %s[stage]^T  by %s" ind d a b (Atom.umma_string atom)
   | Commit p -> ind ^ "commit " ^ p
   | Signal p -> ind ^ "signal " ^ p
+  | Schedule -> ind ^ "take the tiles of unlaunched clusters, for every role of the cluster"
   | Store { dst; src; via; release } ->
     Printf.sprintf "%s%s[tile] <- %s via %s%s" ind dst src via
       (match release with None -> "" | Some p -> ", then " ^ p)
@@ -319,8 +336,9 @@ let to_string k =
     "\n"
     ([ Printf.sprintf "kernel %s (%s)" k.name
          (String.concat ", " (List.map (fun (g : gmat) -> Printf.sprintf "%s : %s[%d,%d]%s" g.name (dtype_string g.dtype) g.rows g.cols (if g.via = Tmap then " via tma" else "")) k.params))
-     ; Printf.sprintf "  tile %dx%d, k tile %d, ring depth %d, %d warps, cluster %dx%d" k.tile_m k.tile_n k.tile_k
-         k.depth k.nwarps k.cluster k.cluster_n ]
+     ; Printf.sprintf "  tile %dx%d, k tile %d, ring depth %d, %d warps, cluster %dx%d, %s" k.tile_m k.tile_n k.tile_k
+         k.depth k.nwarps k.cluster k.cluster_n
+         (match k.tiles with Stride -> "a grid of one CTA per multiprocessor" | Clc n -> Printf.sprintf "cluster launch control, %d slots" n) ]
      @ List.map
          (fun (s : stile) ->
            Printf.sprintf "  smem %s : %s[%d,%d] x %s" s.sname (dtype_string s.sdtype) s.srows s.scols

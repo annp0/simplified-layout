@@ -6,6 +6,7 @@ type t =
   ; pair : bool
   ; swap : bool
   ; tile_m : int
+  ; clc : bool
   }
 
-let default = { bufs = None; cluster = 1; cluster_n = 1; pair = false; swap = false; tile_m = 128 }
+let default = { bufs = None; cluster = 1; cluster_n = 1; pair = false; swap = false; tile_m = 128; clc = false }

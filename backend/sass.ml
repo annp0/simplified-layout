@@ -68,6 +68,14 @@ let ldg b d ~base ~imm =
   push b (I (mk ~defs:[ R d ] ~uses:(urs 4 2) ~late:(regs base 2) ~lat:Variable ~pipe:"lsu"
                (pf "LDG.E R%d, desc[UR4]%s" d (addr base imm))))
 
+(* d:d+1 = a * imm + c:c+1, unsigned *)
+let imad_wide b d a imm c =
+  push b (I (mk ~defs:(regs d 2) ~uses:(R a :: regs c 2) ~lat:(Fixed 6) (pf "IMAD.WIDE.U32 R%d, R%d, %s, R%d" d a (hex imm) c)))
+
+let stg32 b ~base ~imm ~data =
+  push b (I (mk ~uses:(urs 4 2) ~late:(regs base 2 @ [ R data ]) ~lat:Variable ~pipe:"lsu"
+               (pf "STG.E desc[UR4]%s, R%d" (addr base imm) data)))
+
 let stg64 b ~base ~imm ~data =
   push b (I (mk ~uses:(urs 4 2) ~late:(regs base 2 @ regs data 2) ~lat:Variable ~pipe:"lsu"
                (pf "STG.E.64 desc[UR4]%s, R%d" (addr base imm) data)))
@@ -297,9 +305,47 @@ let cluster_barrier b =
     (fun t -> push b (I (mk ~lat:(Fixed 6) ~drain:true ~min_stall:6 t)))
     [ "MEMBAR.ALL.CTA"; "MEMBAR.ALL.GPU"; "ERRBAR"; "CGAERRBAR"; "UCGABAR_ARV"; "UCGABAR_WAIT"; "CCTL.IVALL" ]
 
+(* the cluster meeting alone, without the memory barriers of an exit *)
+let cluster_sync b =
+  List.iter (fun t -> push b (I (mk ~lat:(Fixed 6) ~drain:true ~min_stall:6 t))) [ "UCGABAR_ARV"; "UCGABAR_WAIT" ]
+
 let syncs_arrive_red b ~guard ~base ~imm =
   push b (I (mk ~guard:(pf "@P%d " guard) ~uses:[ P guard ] ~late:[ UR base ] ~lat:Variable
                (pf "SYNCS.ARRIVE.TRANS64.RED.A1T0 RZ, %s, RZ" (bar_addr base imm))))
+
+(* cluster launch control: cancel a cluster not yet launched, its first
+   CTA's id written to [resp] in every CTA of this cluster, each completing 16
+   bytes on its own copy of [mbar] -- clusterlaunchcontrol.try_cancel ...
+   multicast::cluster::all, as ptxas emits it in CUTLASS 70 and nvjet *)
+(* ptxas and CUTLASS give it no scoreboard at all -- its operands are read at
+   issue -- and 6 or more cycles before the next instruction *)
+let ugetnextworkid b ~resp ~mbar =
+  push b (I (mk ~uses:[ UR resp; UR mbar ] ~lat:(Fixed 6) ~min_stall:6 (pf "UGETNEXTWORKID.BROADCAST [UR%d], [UR%d]" resp mbar)))
+
+(* the same barrier operations with the address in a register, [Rn+URZ], as
+   ptxas addresses a barrier it indexes at run time (ref/clcloop.ptx) *)
+let syncs_trywait_r b p ~addr ~parity =
+  push b (I (mk ~defs:[ P p ] ~uses:[ R addr; R parity ] ~lat:Variable
+               (pf "SYNCS.PHASECHK.TRANS64.TRYWAIT P%d, [R%d+URZ], R%d" p addr parity)))
+
+let syncs_arrive_r b ~guard ~addr =
+  push b (I (mk ~guard:(pf "@P%d " guard) ~uses:[ P guard ] ~late:[ R addr ] ~lat:Variable
+               (pf "SYNCS.ARRIVE.TRANS64.A1T0 RZ, [R%d+URZ], RZ" addr)))
+
+let syncs_arrive_tx_r b ~guard ~addr ~tx =
+  push b (I (mk ~guard:(pf "@P%d " guard) ~uses:[ P guard ] ~late:[ R addr; R tx ] ~lat:Variable
+               (pf "SYNCS.ARRIVE.TRANS64 RZ, [R%d+URZ], R%d" addr tx)))
+
+let syncs_arrive_red_r b ~guard ~addr =
+  push b (I (mk ~guard:(pf "@P%d " guard) ~uses:[ P guard ] ~late:[ R addr ] ~lat:Variable
+               (pf "SYNCS.ARRIVE.TRANS64.RED.A1T0 RZ, [R%d+URZ], RZ" addr)))
+
+let syncs_arrive_tx_red_r b ~guard ~addr ~tx =
+  push b (I (mk ~guard:(pf "@P%d " guard) ~uses:[ P guard ] ~late:[ R addr; R tx ] ~lat:Variable
+               (pf "SYNCS.ARRIVE.TRANS64.RED RZ, [R%d+URZ], R%d" addr tx)))
+
+let lds128_r b d ~addr =
+  push b (I (mk ~defs:(regs d 4) ~late:[ R addr ] ~lat:Variable ~pipe:"lsu" (pf "LDS.128 R%d, [R%d]" d addr)))
 
 let syncs_arrive b ~guard ~base ~imm =
   push b (I (mk ~guard:(pf "@P%d " guard) ~uses:[ P guard ] ~late:[ UR base ] ~lat:Variable

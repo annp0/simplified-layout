@@ -91,6 +91,14 @@ def run(path, M, N, K, repeat=20, seed=1):
     # the first launch has finished and been checked; say so before timing,
     # which launches again, so a hang is attributed to the right launch
     print('first launch done, %d wrong' % len(bad), file=sys.stderr, flush=True)
+    if os.environ.get('WARPC_TILES') and len(bad):
+        # which output tiles are wrong, and whether they were never written
+        wrong = np.abs(C - ref) > 1e-3
+        t = wrong.reshape(M // tm, tm, N // tn, tn).any(axis=(1, 3))
+        z = (C == 0).reshape(M // tm, tm, N // tn, tn).all(axis=(1, 3))
+        print("   wrong tiles %d of %d, never written %d" % (int(t.sum()), t.size, int((t & z).sum())))
+        rows = [''.join('x' if t[i, j] else '.' for j in range(t.shape[1])) for i in range(min(t.shape[0], 16))]
+        print("   " + "\n   ".join(rows))
     if os.environ.get('WARPC_DIAG') and len(bad):
         import collections
         z = int(np.sum(C[bad[:,0], bad[:,1]] == 0.0))
