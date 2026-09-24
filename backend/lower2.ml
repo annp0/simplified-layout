@@ -1643,7 +1643,7 @@ let lower (k : kernel) : string list =
      cluster's CTAs xored with the last cluster column's index: the columns
      come in a power of two. *)
   let e_col =
-    if !raster_serpentine && not along_n && pow2 tiles_n && tiles_n > 1
+    if (k.serpentine || !raster_serpentine) && not along_n && pow2 tiles_n && tiles_n > 1
     then begin
       let band = Expr.modulo (Expr.div (Expr.div e_row k.tile_m) (group * cm)) 2 in
       let col_tile = Expr.div e_col k.tile_n in
