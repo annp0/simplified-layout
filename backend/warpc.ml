@@ -1,7 +1,7 @@
 let usage () =
   prerr_endline
     "usage: warpc gemm M N K                  (the configuration the measurements favour)\n\
-    \       warpc pgemm M N K DEPTH [TILE_N] [--bufs B] [--cluster X Y] [--pair] [--swap] [--clc] [--tile-m M]\n\
+    \       warpc pgemm M N K DEPTH [TILE_N] [--bufs B] [--cluster X Y] [--pair] [--swap] [--clc] [--clc-slots N] [--ask-ahead] [--epi-rows R] [--tile-m M]\n\
     \       warpc ptma|pepi M N K        warpc pmma M N K DEPTH\n\
     \       warpc umma M N K             (the first DSL, tcgen05)\n\
     \       warpc hmma M N K             (SM80 fragments)";
@@ -19,9 +19,18 @@ let rec options acc = function
   | "--swap" :: rest -> options { acc with Opt.swap = true } rest
   | "--clc" :: rest -> options { acc with Opt.clc = true } rest
   | "--clc-slots" :: n :: rest -> options { acc with Opt.clc_slots = int n } rest
+  | "--epi-rows" :: n :: rest -> options { acc with Opt.epi_rows = int n } rest
+  | "--ask-ahead" :: rest -> options { acc with Opt.ask_ahead = true } rest
   | "--debug-waits" :: rest -> Lower2.debug_waits := true; options acc rest
   | "--stamps" :: rest -> Lower2.stamps := true; options acc rest
+  | "--stage-stamps" :: rest -> Lower2.stage_stamps := true; options acc rest
+  | "--probe" :: m :: pr :: rest ->
+    let at = function "off" -> Lower2.Probe_off | "early" -> Lower2.Probe_early | "late" -> Lower2.Probe_late | _ -> usage () in
+    Lower2.probe_mma := Some (at m);
+    Lower2.probe_prod := at pr;
+    options acc rest
   | "--mma-reverse" :: rest -> Lower2.mma_reverse := true; options acc rest
+  | "--mma-by-step" :: rest -> Lower2.mma_by_step := true; options acc rest
   | "--tile-m" :: t :: rest -> options { acc with Opt.tile_m = int t } rest
   | _ -> usage ()
 
@@ -44,7 +53,7 @@ let () =
     in
     let o = options Opt.default rest in
     let kernel =
-      Dsl2.gemm ~tile_m:o.tile_m ~tile_n ?bufs:o.bufs ~cluster:o.cluster ~cluster_n:o.cluster_n ~pair:o.pair ~swap:o.swap ~clc:o.clc ~clc_slots:o.clc_slots
+      Dsl2.gemm ~tile_m:o.tile_m ~tile_n ?bufs:o.bufs ~cluster:o.cluster ~cluster_n:o.cluster_n ~pair:o.pair ~swap:o.swap ~clc:o.clc ~clc_slots:o.clc_slots ~epi_rows:o.epi_rows ~ask_ahead:o.ask_ahead
         ~m ~n ~k:(int k) ~depth:(int depth) ()
     in
     List.iter print_endline (Lower2.lower kernel)

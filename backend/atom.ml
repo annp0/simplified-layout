@@ -232,6 +232,33 @@ let tmem_accumulator ~rows ~cols : (Space.logical, Space.physical) Layout.t =
   if rows <> 128 then failwith "Atom.tmem_accumulator: the M=128 accumulator has 128 lanes";
   Layout.storage (Group [ Axis { size = rows; stride = 1 lsl 16 }; Axis { size = cols; stride = 1 } ])
 
+(* The accumulator a CTA holds, as the atom places it in tensor memory: row r
+   of the CTA's share of the result, column c, to lane << 16 | column (CuTe's
+   tmem_frg, cute/atom/mma_traits_sm100.hpp). With 128 rows a CTA -- M = 128
+   on one CTA, M = 256 over a pair -- row r is lane r and column c column c.
+   An M = 128 pair gives each CTA 64 rows, and CuTe's "2x2" atom for it puts
+   the first half of the columns in lanes 0-63 and the second half in lanes
+   64-127, (64, (N/2, 2)) : (1, (128, 64)) in its lane-major addressing --
+   nvjet_hss_64x128_2x2's epilogue reads it so, its lane quarters 2 and 3 on
+   output rows 64 on. The column mode is split in two digits, the half and
+   the column within it; a row-major index decodes into them. *)
+let tmem_acc u : (Space.logical, Space.physical) Layout.t =
+  let rows = snd (cta_rows (umma_c u) ~cols:u.n ~v:0) in
+  match rows, u.ctas with
+  | 128, _ -> tmem_accumulator ~rows ~cols:u.n
+  | 64, 2 ->
+    Layout.storage
+      (Group
+         [ Axis { size = 64; stride = 1 lsl 16 }
+         ; Group [ Axis { size = 2; stride = 64 lsl 16 }; Axis { size = u.n / 2; stride = 1 } ]
+         ])
+  | _ -> failwith (pf "Atom.tmem_acc: no tensor-memory layout for %d rows a CTA" rows)
+
+(* the columns of tensor memory the accumulator spans *)
+let tmem_acc_columns u =
+  let l = tmem_acc u in
+  1 + List.fold_left (fun m c -> max m (Layout.offset l c land 0xffff)) 0 (Coord.enumerate (Layout.shape l))
+
 (* tcgen05.ld.32x32b.x[n], one warp's fragment: lane l receives lane l of the
    warp's 32, register r column r, over a [32 x n] block. The block's place in
    the accumulator is the warp's quarter of the lanes and the column chunk;
@@ -243,16 +270,18 @@ let ldtm_32x32b ~n : (Space.thread_value, Space.logical) Layout.t =
 
 (* The instruction's contract on its composite into tensor memory. [at w ch
    l r] is the address the composite gives lane l's register r of block
-   (w, ch), where w is the block's place among the warps' lane quarters and
-   ch its place along the load's chunks: one warp-uniform address per block,
-   lane l at + l << 16 and register r at + r from it, and block w inside the
-   lanes warp w may reach. *)
+   (w, ch), the block's place in the accumulator's division into 32-row by
+   n-column blocks: one warp-uniform address per block, lane l at + l << 16
+   and register r at + r from it, and the block inside one lane quarter --
+   the warp whose index is that quarter mod 4 is the one that may load it. *)
+let ldtm_quarter ~at w ch = (at w ch 0 0 lsr 16) / ldtm_block
+
 let check_ldtm ~at ~blocks_w ~blocks_ch ~n =
   for w = 0 to blocks_w - 1 do
     for ch = 0 to blocks_ch - 1 do
       let base = at w ch 0 0 in
-      if base lsr 16 <> ldtm_block * w
-      then failwith (pf "Atom.check_ldtm: block %d starts at lane %d, outside the warp's quarter" w (base lsr 16));
+      if (base lsr 16) mod ldtm_block <> 0
+      then failwith (pf "Atom.check_ldtm: block (%d, %d) starts at lane %d, inside a lane quarter" w ch (base lsr 16));
       for l = 0 to ldtm_block - 1 do
         for r = 0 to n - 1 do
           if at w ch l r - base <> (l lsl 16) + r

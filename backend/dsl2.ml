@@ -119,6 +119,13 @@ type kernel =
   ; cluster : int (* CTAs along M: the CTAs one MMA spans *)
   ; cluster_n : int (* CTAs along N: the groups that share the same operand rows *)
   ; tiles : tiles
+  ; ask_ahead : bool
+      (* the tensor-core warp asks whether the next stage has landed before it
+         issues this stage's MMAs, as nvjet's does: the MMAs go out while the
+         try-wait is answered. It pays when issue, not data, bounds the loop
+         (the M = 128 pair at 1024^3, 4384 ns against 4576) and costs when the
+         loads do: there the try-wait holds the warp until the next stage lands
+         (1536^3, 9568 against 7520). *)
   ; tile_m : int
   ; tile_n : int
   ; tile_k : int
@@ -179,41 +186,53 @@ type config =
   ; c_pair : bool
   ; c_swap : bool
   ; c_clc : bool
+  ; c_ask_ahead : bool
   }
 
 let old_config ~tile_n ~depth ~cluster ~pair =
-  { c_tile_m = 128; c_tile_n = tile_n; c_depth = depth; c_cluster = cluster; c_pair = pair; c_swap = false; c_clc = false }
+  { c_tile_m = 128; c_tile_n = tile_n; c_depth = depth; c_cluster = cluster; c_pair = pair; c_swap = false; c_clc = false
+  ; c_ask_ahead = false }
 
-(* cuBLAS's kernels at these shapes, transcribed (nvjet_hss_*_2x1_2cta, read
-   from their SASS): an M = 256 two-CTA MMA with B^T as its A operand, so a
-   CTA's accumulator is 128 output columns by N_mma output rows. Measured
-   against the configurations below on the same GPU:
-   - 8192 and up in every dimension: N_mma = 256, ring depth 6, tiles taken by
-     cluster launch control (nvjet_hss_128x256_64x6): 8192^3 1962 against
-     1745, 16384^3 1818 against 1668. N_mma = 192 is slower there (8192^3
-     1699, 16384^3 1340).
-   - otherwise, when 256-row tiles still fill the machine: N_mma = 192, depth
-     7, a fixed grid (nvjet_hss_128x192_64x7): 4096^3 1667 against 1519,
-     8192x2048x4096 1675 against 1562, 4096x4096x1024 1108 against 1049. Cluster
-     launch control is slower here (1634, 1625): each scheduler fills both
-     slots of its ring at once, and with five tiles a CTA the extra tiles it
-     holds at the end cost more than the balance gains. *)
+let swapped ~tile_m ~tile_n ~depth ~clc ~ask_ahead =
+  { c_tile_m = tile_m; c_tile_n = tile_n; c_depth = depth; c_cluster = 2; c_pair = true; c_swap = true; c_clc = clc
+  ; c_ask_ahead = ask_ahead }
+
+(* cuBLAS's kernels at these shapes, transcribed (nvjet_hss_*_2cta, read from
+   their SASS and their binaries' control words): a two-CTA MMA with B^T as
+   its A operand, so a CTA's accumulator is output columns by output rows.
+   Device time against cuBLAS's best algorithm, nsys, one B200:
+   - 8192 and up in every dimension: 256 x 256 a CTA, two stacked M = 256,
+     N = 256 atoms, ring depth 4, cluster launch control, asking a stage ahead
+     (nvjet_hss_256x256_64x4): 8192^3 544.4 us against 548.1; 16384^3 4.83 ms
+     against 4.73.
+   - otherwise, when 256-row tiles still fill the machine: N = 192, depth 7
+     (nvjet_hss_128x192_64x7), taking tiles by cluster launch control once K
+     is long enough to hide the answer's latency: 4096^3 74.8 us against 75.8,
+     8192x2048x4096 74.8 against 76.7; with a fixed grid at 4096x4096x1024,
+     26.0 against 27.2 (27.0 with the scheduler).
+   - when 128 x 128 tiles would fill at most half the machine: the M = 128
+     pair, 64 x 128 a CTA, depth 13, asking ahead (nvjet_hss_64x128_64x13):
+     1024^3 4384 ns against 4960.
+   The rest keep the configurations CUTLASS's example transcribed to, faster
+   than cuBLAS there too: the pair on 128 x 128 tiles, depth 8 -- 1536^3 7520
+   ns against 8128, 2048^3 14.18 us against 14.69, 3072x1280x2048 14.24
+   against 14.34. *)
 let choose ~m ~n ~k =
   let tiles = m / 128 * (n / 128) in
   let pair_fits = m mod 256 = 0 && n mod 128 = 0 && (tiles <= sms || k / 64 mod 8 = 0) in
   let swapped_fits = n mod 256 = 0 && m mod 64 = 0 && k mod 64 = 0 && (m + 255) / 256 * (n / 128) >= sms in
-  if swapped_fits && min m (min n k) >= 8192
-  then { c_tile_m = 256; c_tile_n = 128; c_depth = 6; c_cluster = 2; c_pair = true; c_swap = true; c_clc = true }
+  if swapped_fits && n mod 512 = 0 && m mod 256 = 0 && min m (min n k) >= 8192
+  then swapped ~tile_m:256 ~tile_n:256 ~depth:4 ~clc:true ~ask_ahead:true
   else if swapped_fits
-  then { c_tile_m = 192; c_tile_n = 128; c_depth = 7; c_cluster = 2; c_pair = true; c_swap = true; c_clc = false }
-  else if 2 * tiles <= sms && n mod 64 = 0 && m / 128 * (n / 64) <= sms
-  then old_config ~tile_n:64 ~depth:8 ~cluster:1 ~pair:false
+  then swapped ~tile_m:192 ~tile_n:128 ~depth:7 ~clc:(k >= 4096) ~ask_ahead:false
+  else if 2 * tiles <= sms && n mod 128 = 0 && m mod 128 = 0 && k mod 64 = 0
+  then swapped ~tile_m:128 ~tile_n:64 ~depth:13 ~clc:false ~ask_ahead:true
   else if min m (min n k) < 12288 && pair_fits
   then old_config ~tile_n:128 ~depth:8 ~cluster:2 ~pair:true
   else old_config ~tile_n:(choose_tile_n ~m ~n ~tile_m:128) ~depth:4 ~cluster:1 ~pair:false
 
 let gemm ?(tile_m = 128) ?(tile_n = 128) ?(tile_k = 64) ?bufs ?(cluster = 1) ?(cluster_n = 1) ?(pair = false)
-    ?(swap = false) ?(clc = false) ?(clc_slots = 1) ~m ~n ~k ~depth () =
+    ?(swap = false) ?(clc = false) ?(clc_slots = 1) ?(epi_rows = 8) ?(ask_ahead = false) ~m ~n ~k ~depth () =
   (* One instruction per 16 columns of K: M rows over the CTAs it spans, N the
      accumulator's columns. [pair] asks for the CTA-pair form. [swap] makes the
      MMA's A operand the tile of B^T, as cuBLAS's nvjet kernels do: the
@@ -253,7 +272,7 @@ let gemm ?(tile_m = 128) ?(tile_n = 128) ?(tile_k = 64) ?bufs ?(cluster = 1) ?(c
            while the copy engine still reads the previous one: 32 rows by 32
            columns, or, with the accumulator transposed, 8 rows by the 32
            columns of the warp's lanes, as nvjet stages it *)
-      ; { sname = "sc"; sdtype = F32; srows = (if swap then 8 else 32); scols = 32; ring = Per_warp 2 }
+      ; { sname = "sc"; sdtype = F32; srows = (if swap then epi_rows else 32); scols = 32; ring = Per_warp 2 }
       ]
   ; depth
   ; tmem =
@@ -269,7 +288,7 @@ let gemm ?(tile_m = 128) ?(tile_n = 128) ?(tile_k = 64) ?bufs ?(cluster = 1) ?(c
           bufs =
             (match bufs with
              | Some b -> b
-             | None -> if 2 * Atom.tmem_columns (reps * atom.n) <= 512 && (m + tile_m - 1) / tile_m * ((n + tile_n - 1) / tile_n) > sms then 2 else 1)
+             | None -> if 2 * Atom.tmem_columns (reps * Atom.tmem_acc_columns atom) <= 512 && (m + tile_m - 1) / tile_m * ((n + tile_n - 1) / tile_n) > sms then 2 else 1)
         } ]
   ; pipes =
       [ { pname = "full"; per_stage = true; per_buffer = false; cross = false; arrivals = 1; free_at_start = false }
@@ -285,6 +304,7 @@ let gemm ?(tile_m = 128) ?(tile_n = 128) ?(tile_k = 64) ?bufs ?(cluster = 1) ?(c
   ; cluster
   ; cluster_n
   ; tiles = (if clc then Clc clc_slots else Stride)
+  ; ask_ahead
   ; tile_m; tile_n; tile_k; k_total = k; tile_m_count = (m + tile_m - 1) / tile_m
   ; tile_n_count = (n + tile_n - 1) / tile_n
   ; body =
@@ -299,7 +319,8 @@ let gemm ?(tile_m = 128) ?(tile_n = 128) ?(tile_k = 64) ?bufs ?(cluster = 1) ?(c
 
 (* the kernel a configuration is *)
 let of_config (c : config) ~m ~n ~k =
-  gemm ~tile_m:c.c_tile_m ~tile_n:c.c_tile_n ~cluster:c.c_cluster ~pair:c.c_pair ~swap:c.c_swap ~clc:c.c_clc ~m ~n ~k
+  gemm ~tile_m:c.c_tile_m ~tile_n:c.c_tile_n ~cluster:c.c_cluster ~pair:c.c_pair ~swap:c.c_swap ~clc:c.c_clc
+    ~ask_ahead:c.c_ask_ahead ~m ~n ~k
     ~depth:c.c_depth ()
 
 (* a probe keeps only the shared tiles its body touches: a tile nothing reads
@@ -378,7 +399,8 @@ let to_string k =
          (String.concat ", " (List.map (fun (g : gmat) -> Printf.sprintf "%s : %s[%d,%d]%s" g.name (dtype_string g.dtype) g.rows g.cols (if g.via = Tmap then " via tma" else "")) k.params))
      ; Printf.sprintf "  tile %dx%d, k tile %d, ring depth %d, %d warps, cluster %dx%d, %s" k.tile_m k.tile_n k.tile_k
          k.depth k.nwarps k.cluster k.cluster_n
-         (match k.tiles with Stride -> "a grid of one CTA per multiprocessor" | Clc n -> Printf.sprintf "cluster launch control, %d slots" n) ]
+         (match k.tiles with Stride -> "a grid of one CTA per multiprocessor" | Clc n -> Printf.sprintf "cluster launch control, %d slots" n)
+       ^ if k.ask_ahead then ", the MMA asks a stage ahead" else "" ]
      @ List.map
          (fun (s : stile) ->
            Printf.sprintf "  smem %s : %s[%d,%d] x %s" s.sname (dtype_string s.sdtype) s.srows s.scols

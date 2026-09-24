@@ -14,14 +14,15 @@ let pipe_gap = function "hmma" -> 4 | _ -> 1
 
 (* The asynchronous units read their uniform-register operands later than the
    ALU does: ptxas never has one of them follow the uniform-ALU instruction
-   that wrote its operand by fewer than 9 cycles, nor UTCHMMA by fewer than
-   19 (CUTLASS 70's SASS). An MMA issued 6 cycles after its descriptor was
-   written read the old one -- measured: the first MMA of a stage lost. *)
+   that wrote its operand by fewer than 9 cycles (CUTLASS 70's SASS), and
+   nvjet issues UTCHMMA 9 cycles after the UIADD3 that advanced its
+   descriptor (nvjet_hss_64x128_64x13_2x2's control words). An MMA issued 6
+   cycles after its descriptor was written read the old one -- measured: the
+   first MMA of a stage lost. *)
 let async_read_delay text =
   let op = match String.split_on_char ' ' (String.trim text) with o :: _ -> o | [] -> "" in
   let starts p = String.length op >= String.length p && String.sub op 0 (String.length p) = p in
-  if starts "UTCHMMA" then 19
-  else if List.exists starts [ "SYNCS"; "UTMALDG"; "UTMASTG"; "UTCBAR"; "UGETNEXTWORKID"; "UTMACCTL"; "UTCATOMSWS" ] then 9
+  if List.exists starts [ "UTCHMMA"; "SYNCS"; "UTMALDG"; "UTMASTG"; "UTCBAR"; "UGETNEXTWORKID"; "UTMACCTL"; "UTCATOMSWS" ] then 9
   else 0
 
 type snap =

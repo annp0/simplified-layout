@@ -261,7 +261,7 @@ let utcatomsws_and b u = push b (I (mk ~late:[ UR u ] ~lat:Variable (pf "UTCATOM
 let utcatomsws_clear b = push b (I (mk ~lat:Variable "UTCATOMSWS.AND URZ, URZ"))
 
 let utchmma b ~a ~bb ~d ~e ~idesc ~acc =
-  push b (I (mk ~defs:[ Tok 1 ] ~uses:[ Tok 1 ] ~late:[ UR a; UR (a + 1); UR bb; UR (bb + 1); UR d; UR e; UR idesc ] ~lat:(Fixed 12) ~min_stall:12
+  push b (I (mk ~defs:[ Tok 1 ] ~uses:[ Tok 1 ] ~late:[ UR a; UR (a + 1); UR bb; UR (bb + 1); UR d; UR e; UR idesc ] ~lat:(Fixed 2) ~min_stall:2
                (pf "UTCHMMA gdesc[UR%d], gdesc[UR%d], tmem[UR%d], tmem[UR%d], idesc[UR%d], %s" a bb d e idesc (if acc then "UPT" else "!UPT"))))
 
 let utcbar b ~mbar = push b (I (mk ~defs:[ Tok 1 ] ~uses:[ Tok 1 ] ~late:[ UR mbar ] ~lat:(Fixed 12) ~min_stall:12 (pf "UTCBAR [UR%d], URZ" mbar)))
@@ -386,7 +386,7 @@ let uisetp_ne b up a =
 (* accumulate flag from a uniform predicate register *)
 let utchmma_up b ~a ~bb ~d ~e ~idesc ~up =
   push b (I (mk ~defs:[ Tok 1 ] ~uses:[ Tok 1; UP up ] ~late:[ UR a; UR (a + 1); UR bb; UR (bb + 1); UR d; UR e; UR idesc ]
-               ~lat:(Fixed 12) ~min_stall:12
+               ~lat:(Fixed 2) ~min_stall:2
                (pf "UTCHMMA gdesc[UR%d], gdesc[UR%d], tmem[UR%d], tmem[UR%d], idesc[UR%d], UP%d" a bb d e idesc up)))
 
 let ldtm_off b d ~n ~addr ~imm =
@@ -398,7 +398,7 @@ let ur_lea_r b d a u sh = lea_ur b d a u sh
 
 let utchmma_acc b ~a ~bb ~d ~e ~idesc ~acc =
   push b (I (mk ~defs:[ Tok 1 ] ~uses:[ Tok 1 ] ~late:[ UR a; UR (a + 1); UR bb; UR (bb + 1); UR d; UR e; UR idesc ]
-               ~lat:(Fixed 12) ~min_stall:12
+               ~lat:(Fixed 2) ~min_stall:2
                (pf "UTCHMMA gdesc[UR%d], gdesc[UR%d], tmem[UR%d], tmem[UR%d], idesc[UR%d], %s" a bb d e idesc (if acc then "UPT" else "!UPT"))))
 
 (* the lowest active lane, for the code that must run once per warp *)
@@ -416,13 +416,13 @@ let utcbar_mc b ~mbar ~mask =
    only the leader issues it and it is guarded on the leader predicate *)
 let utchmma2 b ~guard ~a ~bb ~d ~e ~idesc ~acc =
   push b (I (mk ~guard:(pf "@UP%d " guard) ~defs:[ Tok 1 ] ~uses:[ Tok 1; UP guard ]
-               ~late:[ UR a; UR (a + 1); UR bb; UR (bb + 1); UR d; UR e; UR idesc ] ~lat:(Fixed 12) ~min_stall:12
+               ~late:[ UR a; UR (a + 1); UR bb; UR (bb + 1); UR d; UR e; UR idesc ] ~lat:(Fixed 2) ~min_stall:2
                (pf "UTCHMMA.2CTA gdesc[UR%d], gdesc[UR%d], tmem[UR%d], tmem[UR%d], idesc[UR%d], %s"
                   a bb d e idesc (if acc then "UPT" else "!UPT"))))
 
 let utchmma2_up b ~guard ~a ~bb ~d ~e ~idesc ~up =
   push b (I (mk ~guard:(pf "@UP%d " guard) ~defs:[ Tok 1 ] ~uses:[ Tok 1; UP guard; UP up ]
-               ~late:[ UR a; UR (a + 1); UR bb; UR (bb + 1); UR d; UR e; UR idesc ] ~lat:(Fixed 12) ~min_stall:12
+               ~late:[ UR a; UR (a + 1); UR bb; UR (bb + 1); UR d; UR e; UR idesc ] ~lat:(Fixed 2) ~min_stall:2
                (pf "UTCHMMA.2CTA gdesc[UR%d], gdesc[UR%d], tmem[UR%d], tmem[UR%d], idesc[UR%d], UP%d"
                   a bb d e idesc up)))
 

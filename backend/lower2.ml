@@ -30,6 +30,19 @@ let scratch = List.init 64 (fun i -> 152 + i)
 let r_parity = [| 5; 6; 7; 15 |] (* one parity register per pipe, by declaration order *)
 let r_data = [| 16; 80 |] (* two 64-register epilogue buffers *)
 let p_role = 1 and p_lane0 = 2 and p_loop = 3 and p_lead = 4
+(* A stage asks about the next stage once its own work is out, and the
+   answer is read when that stage comes: the try-wait's predicate is
+   scoreboarded, so the next stage's bookkeeping goes out meanwhile. nvjet's
+   producer asks so, after its loads and their expect-tx arrival; asked any
+   earlier, the try-wait holds up the arrival behind it in the barrier unit
+   (measured: 1536^3 9664 ns against 7520). *)
+let p_probe = 6 and r_probe = 145
+
+(* where each role asks: right after its wait, after its stage's work, or not
+   at all -- a switch for measuring *)
+type probe_at = Probe_off | Probe_early | Probe_late
+let probe_mma : probe_at option ref = ref None (* the kernel's [ask_ahead], unless set *)
+let probe_prod = ref Probe_off
 (* cluster launch control: the parity of the answer ring's barriers, and an
    answer's validity word *)
 let r_clc = 10 and r_clc_free = 8 and r_resp = 11
@@ -62,6 +75,7 @@ let ur_ey = 0 (* the row coordinate of this warp's blocks *)
 let ur_ex = 17 (* and the column coordinate *)
 let ur_acc_rep = 17 (* the tensor-core warp's: a stacked block's accumulator address *)
 let mma_reverse = ref false (* issue a stacked MMA's blocks last first -- for bisection *)
+let mma_by_step = ref false (* interleave a stacked MMA's blocks at every k step -- for measuring *)
 
 (* Scratch for the two operand descriptor bases of the stage being issued.
    Keeping one per stage would cost a register per stage and the pipeline needs
@@ -89,6 +103,9 @@ type st =
   ; mutable max_reg : int
   ; mutable mma_seen : int (* MMAs emitted in the current loop body *)
   ; mutable ring_start : int (* the stage the k loop of the tile being emitted starts on *)
+  ; mutable desc_of : int option (* the stage whose descriptor bases the rebuild registers hold *)
+  ; mutable probe_in : bool (* the stage being emitted has its wait's answer in [p_probe] *)
+  ; mutable probe_next : (int * bool) option (* the stage to ask about next, and whether the ring wraps first *)
   ; clc_full : int (* first barrier slot of the answer ring's "answered" barriers *)
   ; clc_empty : int (* and of its "read" barriers *)
   ; clc_resp : int (* window offset of the answers, 16 bytes each *)
@@ -264,6 +281,25 @@ let stamp st ev =
     st.max_reg <- max st.max_reg (r_stamp + 5)
   end
 
+(* A timing build of the stages: the MMA warp writes the global timer each
+   time a stage has landed, 4096 words a CTA, a running count mod 4096 *)
+let stage_stamps = ref false
+let r_stage_n = 246
+
+let stamp_stage st =
+  if !stage_stamps then begin
+    let b = st.b in
+    Sass.s2r_timer b r_stamp;
+    Sass.ldc64 b (r_stamp + 2) (0x380 + (8 * List.length st.k.params));
+    Sass.s2r_ctaid b (r_stamp + 4) ~axis:"X";
+    Sass.imad_wide b (r_stamp + 2) (r_stamp + 4) (4 * 4096) (r_stamp + 2);
+    Sass.lop3_and b (r_stamp + 1) r_stage_n 4095;
+    Sass.imad_wide b (r_stamp + 2) (r_stamp + 1) 4 (r_stamp + 2);
+    Sass.stg32 b ~base:(r_stamp + 2) ~imm:0 ~data:r_stamp;
+    Sass.iadd3_c b r_stage_n r_stage_n 1;
+    st.max_reg <- max st.max_reg r_stage_n
+  end
+
 let stamp_count_reset st = if !stamps then Sass.mov_imm st.b (r_stamp + 5) 0
 let stamp_count_next st = if !stamps then Sass.iadd3_c st.b (r_stamp + 5) (r_stamp + 5) 1
 
@@ -331,6 +367,14 @@ let tma_pipe_of (k : kernel) name =
 
 let ttile st name = List.find (fun (t : ttile) -> t.tname = name) st.k.tmem
 
+(* An accumulator's tensor-memory layout is the one the atom that writes it
+   fixes, and so are the columns one block of it spans; a probe that runs
+   no MMA has the 128-lane layout. *)
+let acc_image (k : kernel) (acc : ttile) =
+  match Dsl2.mma_atom k with Some u -> Atom.tmem_acc u | None -> Atom.tmem_accumulator ~rows:acc.trows ~cols:acc.tcols
+
+let acc_span (k : kernel) (acc : ttile) = match Dsl2.mma_atom k with Some u -> Atom.tmem_acc_columns u | None -> acc.tcols
+
 (* the hardware coordinates a fragment's thread coordinates stand for *)
 let hw_reg = function "warpid" -> r_warp | "laneid" -> r_lane | v -> failwith ("unbound coordinate " ^ v)
 let hw_range st = function "warpid" -> st.k.nwarps | "laneid" -> 32 | v -> failwith ("unbound coordinate " ^ v)
@@ -354,14 +398,21 @@ let split ~name ~rt ~n f =
   in
   e, Array.init n imm
 
+(* In a pair only the leader waits on the barrier -- its tensor-core warp
+   issues the pair's MMAs -- so both CTAs arrive on the leader's copy, as
+   nvjet's epilogues do (the CTA field with the pair bit cleared). The other
+   copy then receives nothing, and the leader, which waits for the last
+   release before it leaves, is the only CTA a release is still in flight
+   towards. *)
 let release_to_pair st p ~stage ~buf =
-  (let base, imm = mbar_addr st p ~stage ~buf in
-   Sass.syncs_arrive st.b ~guard:p_lane0 ~base ~imm);
   if two_cta st && not (pipe st p).cross
   then begin
-    Sass.uiadd3 st.b ur_peer_bar ur_peer (8 * mbar_slot st p ~stage ~buf);
+    Sass.uiadd3 st.b ur_peer_bar ur_lead (8 * mbar_slot st p ~stage ~buf);
     Sass.syncs_arrive_red st.b ~guard:p_lane0 ~base:ur_peer_bar ~imm:0
   end
+  else
+    let base, imm = mbar_addr st p ~stage ~buf in
+    Sass.syncs_arrive st.b ~guard:p_lane0 ~base ~imm
 
 (* The output coordinate an accumulator's rows -- its tensor-memory lanes --
    stand for: the rows of the MMA's A operand, whichever matrix the load that
@@ -442,17 +493,33 @@ let store_plan st ~dst ~src ~via =
   let blocks_w = acc.trows / lanes and blocks_ch = acc.tcols / n in
   (* The load's fragment, dealt over the accumulator's blocks and composed
      with the accumulator's layout, is the load's address map; Atom checks it
-     against what one warp-uniform address reads. *)
+     against what one warp-uniform address reads. The blocks divide the
+     accumulator's row-major index, which the atom's layout then decodes. *)
+  let blocked = Layout.divide ~by:block (Layout.of_linear (Linear.canonical (Product [ Bound acc.trows; Bound acc.tcols ]))) in
   let ld =
     Layout.compose
       (Layout.interleave ~by:(Linear.canonical (Product [ Bound blocks_w; Bound blocks_ch ])) frag)
-      (Layout.divide ~by:block (Atom.tmem_accumulator ~rows:acc.trows ~cols:acc.tcols))
+      (Layout.compose blocked (acc_image st.k acc))
   in
   let at w ch l r = Layout.offset ld (Coord.Tuple [ Tuple [ Idx w; Idx ch ]; Tuple [ Idx l; Idx r ] ]) in
   Atom.check_ldtm ~at ~blocks_w ~blocks_ch ~n;
-  let rt = Shape.Bound blocks_w in
+  (* Each block is loaded by the warp of its lane quarter, in the order of
+     its place along the accumulator; every quarter gets as many. *)
+  let quarters = 4 in
+  let of_quarter =
+    Array.init quarters (fun q ->
+      List.concat_map
+        (fun w -> List.filter_map (fun ch -> if Atom.ldtm_quarter ~at w ch = q then Some (w, ch) else None) (List.init blocks_ch Fun.id))
+        (List.init blocks_w Fun.id))
+  in
+  let per_warp = List.length of_quarter.(0) in
+  if Array.exists (fun l -> List.length l <> per_warp) of_quarter || per_warp * quarters <> blocks_w * blocks_ch
+  then failwith (src ^ ": the accumulator's blocks are not spread evenly over the four lane quarters");
+  let block_of q j = List.nth of_quarter.(q) j in
+  let rt = Shape.Bound quarters in
   let w_of = function Coord.Idx w -> w | Tuple _ -> assert false in
-  let e_ld, imm_ld = split ~name:"tensor-memory load" ~rt ~n:blocks_ch (fun c ch -> at (w_of c) ch 0 0) in
+  let at_block c j = let w, ch = block_of (w_of c) j in at w ch 0 0 in
+  let e_ld, imm_ld = split ~name:"tensor-memory load" ~rt ~n:per_warp (fun c j -> at_block c j) in
   (* The staging write is the same fragment, taken to output coordinates and
      composed with the staging tile's layout -- the box the copy engine reads
      -- so a register's address is where the store will look for it. *)
@@ -483,8 +550,9 @@ let store_plan st ~dst ~src ~via =
       (to_out ~rows:acc.trows ~cols:acc.tcols)
   in
   let origin w ch = Layout.offset tile (Coord.Tuple [ Tuple [ Idx 0; Idx 0 ]; Tuple [ Idx w; Idx ch ] ]) in
-  let e_y, imm_y = split ~name:"store row" ~rt ~n:blocks_ch (fun c ch -> origin (w_of c) ch / out_cols) in
-  let e_x, imm_x = split ~name:"store column" ~rt ~n:blocks_ch (fun c ch -> origin (w_of c) ch mod out_cols) in
+  let origin_of c j = let w, ch = block_of (w_of c) j in origin w ch in
+  let e_y, imm_y = split ~name:"store row" ~rt ~n:per_warp (fun c j -> origin_of c j / out_cols) in
+  let e_x, imm_x = split ~name:"store column" ~rt ~n:per_warp (fun c j -> origin_of c j mod out_cols) in
   (* A stacked MMA's block r is the same accumulator r * tcols columns on,
      and in the output it is the block of rows r * trows of the MMA's rows on:
      where those land is read off the whole accumulator taken to output
@@ -493,13 +561,13 @@ let store_plan st ~dst ~src ~via =
   let full_rows = reps * acc.trows in
   let full_out_cols = if lanes_are_cols then full_rows else acc.tcols in
   let rep_origin r = Layout.offset (to_out ~rows:full_rows ~cols:acc.tcols) (Coord.Tuple [ Idx (r * acc.trows); Idx 0 ]) in
-  let rep_ld = Array.init reps (fun r -> r * acc.tcols) in
+  let rep_ld = Array.init reps (fun r -> r * acc_span st.k acc) in
   let rep_y = Array.init reps (fun r -> rep_origin r / full_out_cols) in
   let rep_x = Array.init reps (fun r -> rep_origin r mod full_out_cols) in
   (* the warp's copies of the staging tile *)
   let e_copy = Expr.scale (copies * copy) (Expr.var "c") in
   { sp_dst = dst; e_ld; imm_ld; e_copy; e_y; imm_y; e_x; imm_x; sts; sp_n = n; vec; sp_elem = elem; copy; copies
-  ; blocks_ch; rep_ld; rep_y; rep_x }
+  ; blocks_ch = per_warp; rep_ld; rep_y; rep_x }
 
 let quarter e = Expr.bind "c" (Expr.modulo (Expr.var "warpid") 4) e
 
@@ -550,14 +618,24 @@ let store_body st (p : store_plan) ~release ~buf =
   let imm_ld = p.imm_ld and imm_x = p.imm_x and imm_y = p.imm_y and blocks_n = p.blocks_ch in
   let dst = p.sp_dst in
   let reps = Array.length p.rep_ld in
+  (* Each block's tensor-memory load goes out as soon as the block before it
+     has been staged, into the other register buffer: its latency runs under
+     that block's fence and store instead of ahead of this block's writes. *)
+  let blocks = List.concat_map (fun r -> List.init blocks_n (fun ch -> r, ch)) (List.init reps Fun.id) in
+  let nblk = List.length blocks in
+  let load blk =
+    let r, ch = List.nth blocks blk in
+    let d = r_data.(blk mod 2) in
+    Sass.ldtm_off b d ~n ~addr:ur_epi ~imm:(imm_ld.(ch) + p.rep_ld.(r));
+    st.max_reg <- max st.max_reg (d + n - 1)
+  in
+  load 0;
   for r = 0 to reps - 1 do
     for ch = 0 to blocks_n - 1 do
       (* the staging copies and the load registers alternate over every block
          of the tile, stacked blocks included *)
       let blk = (r * blocks_n) + ch in
       let d = r_data.(blk mod 2) and slot = blk mod copies in
-      Sass.ldtm_off b d ~n ~addr:ur_epi ~imm:(imm_ld.(ch) + p.rep_ld.(r));
-      st.max_reg <- max st.max_reg (d + n - 1);
       (* The copy this block goes into was last read by the store [copies]
          blocks back -- in this tile or the previous one. Stores finish in
          order, so at most [copies - 1] may still be reading when it is
@@ -566,6 +644,7 @@ let store_body st (p : store_plan) ~release ~buf =
       for q = 0 to (n / vec) - 1 do
         Sass.sts_r b ~width:(8 * vec * elem) ~r:(r_swz + q) ~imm:(slot * copy) ~data:(d + (vec * q))
       done;
+      if blk + 1 < nblk then load (blk + 1);
       (* the stores have taken the last block's values, so the load that
          produced them has landed: the accumulator is free for the next tile's
          MMAs while its last blocks are still being written out *)
@@ -615,7 +694,26 @@ let commit_bar st p ~stage ~buf =
     Sass.uiadd3 st.b ur_tmp r imm;
     ur_tmp
 
+(* ask whether stage [stage] of a ring's barrier has completed the phase its
+   next use waits for: this pass's, or -- past the ring's last stage -- the
+   next pass's *)
+let probe st p ~stage ~wraps =
+  let r = r_parity.(Hashtbl.find st.pipe_index p) in
+  let parity = if wraps then (Sass.lop3_xor_imm st.b r_probe r 0x80000000; r_probe) else r in
+  st.max_reg <- max st.max_reg r_probe;
+  let base, imm = mbar_addr st p ~stage ~buf:stage in
+  Sass.syncs_trywait st.b p_probe ~base ~imm ~parity_reg:(Some parity)
+
 let rec lower_stmt st ~stage ~buf ~(tx_done : (string, unit) Hashtbl.t) ~(tma_index : int ref) = function
+  | Wait p when (pipe st p).per_stage && not !debug_waits ->
+    (* the answer to the question the last stage asked, if it asked: the
+       blocking wait runs only when that stage was not yet complete *)
+    let ready = new_label st "READY" in
+    if st.probe_in then Sass.bra st.b p_probe ready;
+    lower_wait st p ~stage ~buf;
+    if st.probe_in then Sass.label st.b ready;
+    if p = "full" then stamp_stage st;
+    (match st.probe_next with Some (next, wraps) -> probe st p ~stage:next ~wraps | None -> ())
   | Wait p ->
     lower_wait st p ~stage ~buf;
     if p = "ready" then stamp st 7
@@ -692,33 +790,49 @@ let rec lower_stmt st ~stage ~buf ~(tx_done : (string, unit) Hashtbl.t) ~(tma_in
     let kept = st.k.depth <= 4 in
     let base_a = if kept then ur_dbase_block + (2 * stage) else ur_dbase in
     let base_b = base_a + 1 in
+    (* A deep ring keeps one pair of bases and moves them from stage to stage:
+       the start field is the address over 16, so the next stage's is one add
+       of the stages' distance over 16, as nvjet advances it (UIADD3 UR16,
+       UR16, 0x3fa). The first stage a k loop emits builds them outright. *)
     if not kept
     then begin
-      desc_low st ~ur:base_a ~off:(Hashtbl.find st.smem_dyn a + (stage * st.stage_bytes));
-      desc_low st ~ur:base_b ~off:(Hashtbl.find st.smem_dyn bb + (stage * st.stage_bytes))
+      match st.desc_of with
+      | Some prev ->
+        let d = (stage - prev) * st.stage_bytes in
+        if d mod 16 <> 0 then failwith "mma: a stage is not a whole number of 16-byte units";
+        Sass.uiadd3 b base_a base_a (d / 16);
+        Sass.uiadd3 b base_b base_b (d / 16)
+      | None ->
+        desc_low st ~ur:base_a ~off:(Hashtbl.find st.smem_dyn a + (stage * st.stage_bytes));
+        desc_low st ~ur:base_b ~off:(Hashtbl.find st.smem_dyn bb + (stage * st.stage_bytes))
     end;
-    for j = 0 to steps - 1 do
+    st.desc_of <- Some stage;
+    (* the tile's first k step overwrites every block; it reads a flag the
+       loop body sets, every other step accumulates *)
+    let first = st.mma_seen = 0 in
+    if first then Sass.uisetp_ne b 0 ur_mma_count;
+    let issue ~r ~j =
       Sass.uiadd3 b ur_db base_b (db.kstep * j);
-      (* the tile's first k step overwrites every block; it reads a flag the
-         loop body sets, every other step accumulates *)
-      let first = st.mma_seen = 0 in
-      if first then Sass.uisetp_ne b 0 ur_mma_count;
-      for r' = 0 to acc.reps - 1 do
-        let r = if !mma_reverse then acc.reps - 1 - r' else r' in
-        Sass.uiadd3 b ur_da base_a ((da.kstep * j) + a_rep r);
-        let dst = if r = 0 then ur_acc else (Sass.uiadd3 b ur_acc_rep ur_acc (r * acc.tcols); ur_acc_rep) in
-        if first
-        then
-          if two_cta st
-          then Sass.utchmma2_up b ~guard:up_leader ~a:ur_da ~bb:ur_db ~d:dst ~e:ur_zero ~idesc:ur_idesc ~up:0
-          else Sass.utchmma_up b ~a:ur_da ~bb:ur_db ~d:dst ~e:ur_zero ~idesc:ur_idesc ~up:0
-        else if two_cta st
-        then Sass.utchmma2 b ~guard:up_leader ~a:ur_da ~bb:ur_db ~d:dst ~e:ur_zero ~idesc:ur_idesc ~acc:true
-        else Sass.utchmma_acc b ~a:ur_da ~bb:ur_db ~d:dst ~e:ur_zero ~idesc:ur_idesc ~acc:true
-      done;
-      if first then Sass.umov b ur_mma_count 1;
-      st.mma_seen <- st.mma_seen + 1
-    done
+      Sass.uiadd3 b ur_da base_a ((da.kstep * j) + a_rep r);
+      let dst = if r = 0 then ur_acc else (Sass.uiadd3 b ur_acc_rep ur_acc (r * acc_span st.k acc); ur_acc_rep) in
+      if first && j = 0
+      then
+        if two_cta st
+        then Sass.utchmma2_up b ~guard:up_leader ~a:ur_da ~bb:ur_db ~d:dst ~e:ur_zero ~idesc:ur_idesc ~up:0
+        else Sass.utchmma_up b ~a:ur_da ~bb:ur_db ~d:dst ~e:ur_zero ~idesc:ur_idesc ~up:0
+      else if two_cta st
+      then Sass.utchmma2 b ~guard:up_leader ~a:ur_da ~bb:ur_db ~d:dst ~e:ur_zero ~idesc:ur_idesc ~acc:true
+      else Sass.utchmma_acc b ~a:ur_da ~bb:ur_db ~d:dst ~e:ur_zero ~idesc:ur_idesc ~acc:true
+    in
+    let reps = List.init acc.reps (fun r' -> if !mma_reverse then acc.reps - 1 - r' else r') in
+    (* A stacked MMA takes the stage one block at a time, every k step of a
+       block before the next block, as nvjet's 256 x 256 does; [mma_by_step]
+       interleaves the blocks at each k step instead. *)
+    if !mma_by_step
+    then for j = 0 to steps - 1 do List.iter (fun r -> issue ~r ~j) reps done
+    else List.iter (fun r -> for j = 0 to steps - 1 do issue ~r ~j done) reps;
+    if first then Sass.umov b ur_mma_count 1;
+    st.mma_seen <- st.mma_seen + steps
   | Commit p ->
     (* A stage the whole cluster refills is released to the whole cluster: the
        commit signals that barrier in every CTA the mask selects, and each CTA
@@ -789,9 +903,25 @@ let rec lower_stmt st ~stage ~buf ~(tx_done : (string, unit) Hashtbl.t) ~(tma_in
            desc_low st ~ur:(ur_dbase_block + (2 * stage) + 1) ~off:(Hashtbl.find st.smem_dyn bb + (stage * st.stage_bytes))
          done
      | Some _ -> assert false);
-    let emit_stage stage =
+    let mode =
+      if !debug_waits then Probe_off
+      else if List.exists (function Mma _ -> true | _ -> false) body
+      then (match !probe_mma with Some m -> m | None -> if st.k.ask_ahead then Probe_early else Probe_off)
+      else !probe_prod
+    in
+    let ask next = match next with
+      | Some (next, wraps) -> List.iter (fun p -> if (pipe st p).per_stage then probe st p ~stage:next ~wraps) waited
+      | None -> ()
+    in
+    let emit_stage ?(pending = false) ?next stage =
       let tx_done = Hashtbl.create 2 and tma_index = ref 0 in
-      List.iter (lower_stmt st ~stage ~buf ~tx_done ~tma_index) body
+      let pending = pending && mode <> Probe_off in
+      st.probe_in <- pending;
+      st.probe_next <- (if mode = Probe_early then next else None);
+      List.iter (lower_stmt st ~stage ~buf ~tx_done ~tma_index) body;
+      if mode = Probe_late then ask next;
+      st.probe_in <- false;
+      st.probe_next <- None
     in
     (* A stage barrier's phase is the number of passes the ring has made, so
        the one parity every stage shares flips each time the ring wraps past
@@ -802,20 +932,29 @@ let rec lower_stmt st ~stage ~buf ~(tx_done : (string, unit) Hashtbl.t) ~(tma_in
         waited
     in
     st.mma_seen <- 0;
+    st.desc_of <- None;
     (* the timing build notes when the tile's first stage has landed: a second
        wait on a phase that has completed passes at once *)
     if !stamps && List.mem "full" waited && List.exists (function Mma _ -> true | _ -> false) body
     then (lower_wait st "full" ~stage:s0 ~buf; stamp st 9);
+    (* each stage asks about the one that runs after it: within a pass the
+       next stage, past the last stage the first one of the next pass *)
+    let after_head = rounds > 0 || tail > 0 in
     for stage = s0 to s0 + head - 1 do
-      emit_stage stage
+      let next = if stage < s0 + head - 1 then Some (stage + 1, false) else if after_head then Some (0, true) else None in
+      emit_stage ~pending:(stage > s0) ?next stage
     done;
     if head > 0 && s0 + head = s then wrap ();
     if rounds > 0 then begin
       if rounds > 1 then Sass.mov_rz b r_cnt;
+      (* the loop's first stage reads an answer on every pass: the head's
+         last stage asked, or it is asked here *)
+      if head = 0 && mode <> Probe_off
+      then List.iter (fun p -> if (pipe st p).per_stage then probe st p ~stage:0 ~wraps:false) waited;
       let l = new_label st "KLOOP" in
       Sass.label b l;
       for stage = 0 to s - 1 do
-        emit_stage stage
+        emit_stage ~pending:true ~next:(if stage < s - 1 then stage + 1, false else 0, true) stage
       done;
       wrap ();
       if rounds > 1 then begin
@@ -827,7 +966,7 @@ let rec lower_stmt st ~stage ~buf ~(tx_done : (string, unit) Hashtbl.t) ~(tma_in
     (* the k tiles left over: the first [tail] stages of one more pass, with the
        parities the loop left behind; the next tile starts where they end *)
     for stage = 0 to tail - 1 do
-      emit_stage stage
+      emit_stage ~pending:(stage > 0 || rounds > 0 || head > 0) ?next:(if stage < tail - 1 then Some (stage + 1, false) else None) stage
     done
   | Role _ -> failwith "nested role"
   | Schedule -> failwith "the scheduler is a role of its own"
@@ -879,7 +1018,7 @@ let buffer_base st ~buf ~into =
 
 let dealloc st =
   let acc = List.hd st.k.tmem in
-  let ncols = Atom.tmem_columns (acc.reps * acc.tcols) in
+  let ncols = Atom.tmem_columns (acc.reps * acc_span st.k acc) in
   (* An allocation of all 512 columns is freed by clearing the allocator's
      whole map, as nvjet does: clearing its columns alone leaves the next
      launch on the SM waiting forever (measured, warpc talloc 512 [clear]).
@@ -1088,7 +1227,7 @@ let clc_loop_probe ~first () =
   in
   let st =
     { b; k; pipe_slot = Hashtbl.create 1; pipe_index = Hashtbl.create 1; smem_dyn = Hashtbl.create 1; stage_bytes = 0
-    ; slot_off = 0x420; labels = 0; max_reg = 32; mma_seen = 0; ring_start = 0; smem_base = ur_smem; epi_off = 0
+    ; slot_off = 0x420; labels = 0; max_reg = 32; mma_seen = 0; ring_start = 0; desc_of = None; probe_in = false; probe_next = None; smem_base = ur_smem; epi_off = 0
     ; layouts = Hashtbl.create 1; copy_bytes = Hashtbl.create 1; clc_full = first; clc_empty = first + 2
     ; clc_resp = 0x400 + (8 * (first + 4)) + 16 }
   in
@@ -1226,11 +1365,11 @@ let lower (k : kernel) : string list =
   then failwith (Printf.sprintf "shared memory: %d bytes, the multiprocessor has 232448" (dyn_bytes + static_bytes + 0x400));
   (* each buffer is its own allocation, of the power of two that holds its
      blocks *)
-  let acc_cols = let t = List.hd k.tmem in Atom.tmem_columns (t.reps * t.tcols) in
+  let acc_cols = let t = List.hd k.tmem in Atom.tmem_columns (t.reps * acc_span k t) in
   if acc_cols * nbuf > 512 then failwith "tmem columns";
   let st =
     { b; k; pipe_slot; pipe_index; smem_dyn; stage_bytes; slot_off; labels = 0; max_reg = r_data.(1) + 63; mma_seen = 0
-    ; ring_start = 0; clc_full; clc_empty; clc_resp
+    ; ring_start = 0; desc_of = None; probe_in = false; probe_next = None; clc_full; clc_empty; clc_resp
     ; smem_base = ur_smem; epi_off = dyn_base + (stage_bytes * k.depth); layouts; copy_bytes }
   in
   (* a store's warps read tensor memory through their lane quarters, so they
@@ -1252,6 +1391,7 @@ let lower (k : kernel) : string list =
   Sass.umov b ur_tmp 0x400;
   Sass.ulea b ur_smem ur_cta ur_tmp 0x18;
   stamp_count_reset st;
+  if !stage_stamps then Sass.mov_imm b r_stage_n 0;
   stamp st 0;
   (* The tile a CTA owns. The map from a CTA index to a tile is a layout: the
      index's digits -- the CTA's rank in its cluster, its place in a group of
@@ -1485,9 +1625,9 @@ let lower (k : kernel) : string list =
         Sass.isetp_lt_u32_imm b p_role r_warp (hi + 1);
         Sass.bra b ~neg:true p_role skip;
         let done_ = new_label st "SCHED_DONE" in
+        (* the scheduler leaves once the takers have read its last answer *)
         schedule st ~role_end:done_;
         Sass.label b done_;
-        if grid_cluster k then Sass.cluster_barrier b;
         Sass.exit b;
         Sass.label b skip
       | Role (ws, body) ->
@@ -1548,22 +1688,53 @@ let lower (k : kernel) : string list =
         (* and, taking tiles from the scheduler, until the answer ring's slot
            comes round *)
         let unroll = lcm (lcm nbuf period) (max 1 clc_slots) in
+        (* A role leaves only once everything it handed out has come back:
+           for each barrier it waits on that starts free -- a stage it filled,
+           an accumulator it wrote -- it waits for the phase its next use
+           would, so the arrivals that return them, the only ones still in
+           flight towards its CTA, have landed. That is what lets a CTA leave
+           without meeting its cluster. Each way out of the tile loop knows
+           the tile it would have run next, [next], and with it the ring's
+           position and the buffer. *)
+        let rec all_waits acc = function
+          | [] -> acc
+          | Wait p :: r -> all_waits (if List.mem p acc then acc else p :: acc) r
+          | Kloop b :: r -> all_waits (all_waits acc b) r
+          | _ :: r -> all_waits acc r
+        in
+        let returned = List.filter (fun p -> (pipe st p).free_at_start) (List.rev (all_waits [] body)) in
+        let drain ~next =
+          List.iter
+            (fun p ->
+              let pp = pipe st p in
+              let r = r_parity.(Hashtbl.find st.pipe_index p) in
+              let n, first =
+                if pp.per_stage then k.depth, (if runs_ring then next * t mod k.depth else 0)
+                else if pp.per_buffer then nbuf, next mod nbuf
+                else 1, 0
+              in
+              for i = first to n - 1 do lower_wait st p ~stage:i ~buf:i done;
+              if first > 0 then begin
+                Sass.lop3_xor_imm b r r 0x80000000;
+                for i = 0 to first - 1 do lower_wait st p ~stage:i ~buf:i done
+              end)
+            returned
+        in
+        let exits = ref [] in
+        let exit_before next = let l = new_label st "LEAVE" in exits := (l, next) :: !exits; l in
         if persistent then Sass.label b tl;
         for u = 0 to unroll - 1 do
           let buf = u mod nbuf in
           st.ring_start <- (if runs_ring then u * t mod k.depth else 0);
           if u > 0 && not clc then begin
             Sass.isetp_lt_u32_imm b p_role r_tile total_tiles;
-            Sass.bra b ~neg:true p_role tl_end
+            Sass.bra b ~neg:true p_role (exit_before u)
           end;
           tile_indices ();
           if uses_tmem body then buffer_base st ~buf ~into:ur_acc;
           List.iter (lower_stmt st ~stage:0 ~buf ~tx_done:(Hashtbl.create 1) ~tma_index:(ref 0)) body;
           stamp st (ev_start / 2 + 11);
           stamp_count_next st;
-          if clc
-          then clc_take st ~slot:(u mod clc_slots) ~last:(u mod clc_slots = clc_slots - 1) ~tl_end
-          else Sass.iadd3_c b r_tile r_tile grid;
           (* a buffer's barrier completes once per pass over the buffers *)
           if buf = nbuf - 1
           then
@@ -1571,7 +1742,10 @@ let lower (k : kernel) : string list =
               (fun p ->
                 if (pipe st p).per_buffer
                 then (let r = r_parity.(Hashtbl.find st.pipe_index p) in Sass.lop3_xor_imm b r r 0x80000000))
-              (List.rev (waits [] body))
+              (List.rev (waits [] body));
+          if clc
+          then clc_take st ~slot:(u mod clc_slots) ~last:(u mod clc_slots = clc_slots - 1) ~tl_end:(exit_before (u + 1))
+          else Sass.iadd3_c b r_tile r_tile grid
         done;
         if persistent then
           if clc then Sass.jmp b tl
@@ -1579,6 +1753,16 @@ let lower (k : kernel) : string list =
             Sass.isetp_lt_u32_imm b p_role r_tile total_tiles;
             Sass.bra b p_role tl
           end;
+        if not (persistent && clc) then drain ~next:unroll;
+        if !exits <> [] then begin
+          Sass.jmp b tl_end;
+          List.iter
+            (fun (l, next) ->
+              Sass.label b l;
+              drain ~next;
+              Sass.jmp b tl_end)
+            (List.rev !exits)
+        end;
         Sass.label b tl_end;
         (* Tensor memory is freed only once nothing can touch it: the MMAs have
            completed and every warp that reads the accumulator has read it.
@@ -1592,7 +1776,6 @@ let lower (k : kernel) : string list =
         stamp st ev_end;
         if uses_tmem body then Sass.bar_sync_n b ~bar:1 ~count:(32 * tmem_warps);
         if lo <= alloc_warp && alloc_warp <= hi then dealloc st;
-        if grid_cluster k then Sass.cluster_barrier b;
         if ev_start = 6 then stamp st 10;
         Sass.exit b;
         Sass.label b skip
@@ -1644,8 +1827,9 @@ let lower (k : kernel) : string list =
       Printf.sprintf ".grid %d 1" grid; Printf.sprintf ".mbarriers %d" !nslots
       ; Printf.sprintf ".cluster %d" (ctas k)
       ; ".tcgen05"
-      ; ".params " ^ String.concat " " (List.map (fun _ -> "8") k.params @ if !debug_waits || !stamps then [ "8" ] else []) ]
+      ; ".params " ^ String.concat " " (List.map (fun _ -> "8") k.params @ if !debug_waits || !stamps || !stage_stamps then [ "8" ] else []) ]
     @ (if !debug_waits then ".debug" :: List.rev_map (fun l -> "# " ^ l) !debug_sites else [])
     @ (if !stamps then ".debug" :: ".stamps" :: List.map (fun (i, s) -> Printf.sprintf "# stamp %d: %s" i s) stamp_names else [])
+    @ (if !stage_stamps then [ ".debug"; ".stagestamps" ] else [])
   in
   header @ Sched.schedule (Sass.items b)
