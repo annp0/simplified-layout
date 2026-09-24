@@ -68,7 +68,7 @@ def run(path, M, N, K, repeat=20, seed=1):
     arrays = {'a': (dA, (M, K)), 'bt': (dB, (N, K)), 'c': (dC, (M, N))}
     dtypes = {2: CU_TENSOR_MAP_DATA_TYPE_FLOAT16, 4: CU_TENSOR_MAP_DATA_TYPE_FLOAT32}
     swizzles = {128: CU_TENSOR_MAP_SWIZZLE_128B}
-    if len(hdr.get('tmap', [])) != len(hdr['params']):
+    if len(hdr.get('tmap', [])) != len(hdr['params']) - (1 if 'debug' in hdr else 0):
         raise RuntimeError('every parameter must be a tensor map the kernel describes')
     ptrs = []
     for name, rows, cols, elem, brows, bcols, swz in hdr['tmap']:
@@ -80,12 +80,27 @@ def run(path, M, N, K, repeat=20, seed=1):
         ctx.write_bytes(dmap, tensor_map_2d(buf.ptr, rows, cols, elem, brows, bcols, swizzle=swizzles[swz], dtype=dtypes[elem]))
         ptrs.append(dmap.ptr)
     args = [ctypes.c_uint64(p) for p in ptrs]
+    dbg = None
+    if 'debug' in hdr:
+        # a debugging build: each wait that gives up writes (wait, parity) here
+        ndbg = 1 << 20
+        dbg = ctx.alloc(8 * ndbg); ctx.write_bytes(dbg, b'\x00' * (8 * ndbg))
+        args.append(ctypes.c_uint64(dbg.ptr))
     grid = (tuple(int(x) for x in hdr['grid'].split()) + (1,)) if 'grid' in hdr else (N // tn, M // tm, 1)
     block = (hdr['threads'], 1, 1)
     if cl > 1:
         launch_cluster(func, grid, block, args, shared_mem=dyn, cluster=(cl, 1, 1))
     else:
         func.launch(grid=grid, block=block, args=args, shared_mem=dyn, timed=False)
+    if dbg is not None:
+        import collections
+        w = np.frombuffer(ctx.read_bytes(dbg, 8 * (1 << 20)), dtype=np.uint32).reshape(-1, 2)
+        hit = np.nonzero(w[:, 0])[0]
+        sites = dict(l[2:].split(': ', 1) for l in open(path) if l.startswith('# wait '))
+        print('waits that gave up: %d' % len(hit))
+        for (wid, par), n in collections.Counter((int(w[i, 0]), int(w[i, 1])) for i in hit).most_common(12):
+            ex = [int(i) for i in hit if w[i, 0] == wid][:4]
+            print('   %4d x  %s  parity %#x  (cta.warp %s)' % (n, sites.get('wait %d' % wid, '?'), par, ', '.join('%d.%d' % (i // 8, i % 8) for i in ex)))
     C = np.frombuffer(ctx.read_bytes(dC, M * N * 4), dtype=np.float32).reshape(M, N)
     bad = np.argwhere(np.abs(C - ref) > 1e-3)
     # the first launch has finished and been checked; say so before timing,

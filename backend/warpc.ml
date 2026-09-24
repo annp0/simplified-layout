@@ -18,6 +18,7 @@ let rec options acc = function
   | "--pair" :: rest -> options { acc with Opt.pair = true } rest
   | "--swap" :: rest -> options { acc with Opt.swap = true } rest
   | "--clc" :: rest -> options { acc with Opt.clc = true } rest
+  | "--debug-waits" :: rest -> Lower2.debug_waits := true; options acc rest
   | "--tile-m" :: t :: rest -> options { acc with Opt.tile_m = int t } rest
   | _ -> usage ()
 

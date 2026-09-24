@@ -215,14 +215,54 @@ let operand_desc st name =
   let t = stile st name in
   Atom.umma_kmajor (Hashtbl.find st.layouts name) ~elem:(elem_bytes t.sdtype) ~mma_k:(Atom.umma_k (the_atom st.k))
 
+(* A debugging build: every pipe wait gives up after [debug_spins] tries,
+   writes which wait it was to the debug buffer (the kernel's last parameter,
+   8 bytes per CTA and warp: the wait's number and its parity), and leaves.
+   The header lists what each number is. *)
+let debug_waits = ref false
+let debug_spins = 4_000_000
+let debug_sites : string list ref = ref []
+
 let lower_wait st p ~stage ~buf =
   let pp = pipe st p in
   let r = r_parity.(Hashtbl.find st.pipe_index p) in
   let l = new_label st "WAIT" in
-  Sass.label st.b l;
   let base, imm = mbar_addr st p ~stage ~buf in
-  Sass.syncs_trywait st.b 0 ~base ~imm ~parity_reg:(Some r);
-  Sass.bra st.b ~neg:true 0 l;
+  if !debug_waits
+  then begin
+    let id = List.length !debug_sites + 1 in
+    debug_sites := Printf.sprintf "wait %d: %s stage %d buf %d ring_start %d" id p stage buf st.ring_start :: !debug_sites;
+    let passed = new_label st "WAITED" and give_up = new_label st "GIVE_UP" in
+    Sass.mov_imm st.b r_resp 0;
+    Sass.label st.b l;
+    Sass.syncs_trywait st.b 0 ~base ~imm ~parity_reg:(Some r);
+    Sass.bra st.b 0 passed;
+    Sass.iadd3_c st.b r_resp r_resp 1;
+    Sass.isetp_lt_u32_imm st.b 5 r_resp debug_spins;
+    Sass.bra st.b 5 l;
+    Sass.jmp st.b give_up;
+    Sass.label st.b give_up;
+    (* out[ctaid * 8 + warp] = (id, parity) *)
+    Sass.ldc64 st.b 20 (0x380 + (8 * List.length st.k.params));
+    Sass.s2r_ctaid st.b 22 ~axis:"X";
+    Sass.imad st.b 22 22 8 r_warp;
+    Sass.imad_wide st.b 20 22 8 20;
+    Sass.mov_imm st.b 24 id;
+    Sass.mov_rr st.b 25 r;
+    Sass.stg64 st.b ~base:20 ~imm:0 ~data:24;
+    Sass.exit st.b;
+    Sass.label st.b passed
+  end
+  else begin
+    (* a warp that finds the barrier not yet complete sleeps before asking
+       again: spinning on it without a pause hangs the two-CTA kernel at ring
+       depth 7 in most launches (measured, 11 of 12), as if the waiters kept
+       the barrier unit from the arrivals they wait for *)
+    Sass.label st.b l;
+    Sass.syncs_trywait st.b 0 ~base ~imm ~parity_reg:(Some r);
+    Sass.nanosleep_syncs st.b ~neg:true 0;
+    Sass.bra st.b ~neg:true 0 l
+  end;
 
   (* a barrier used once per tile completes a phase here; one used once per
      stage completes it when the k loop comes round, and flips there *)
@@ -800,6 +840,7 @@ let wait_slot st ~addr ~slot ~parity =
   then Sass.syncs_trywait_r st.b 0 ~addr ~parity
   else (let base, imm = mbar_addr_of_slot slot in
         Sass.syncs_trywait st.b 0 ~base ~imm ~parity_reg:(Some parity));
+  Sass.nanosleep_syncs st.b ~neg:true 0;
   Sass.bra st.b ~neg:true 0 l
 
 (* read the answer at window offset [off]: its first word to [first], its
@@ -1086,6 +1127,9 @@ let lower (k : kernel) : string list =
       0 k.smem
   in
   let dyn_bytes = (stage_bytes * k.depth) + epi_bytes in
+  (* a B200 multiprocessor gives a CTA 227 KB of shared memory *)
+  if dyn_bytes + static_bytes + 0x400 > 232448
+  then failwith (Printf.sprintf "shared memory: %d bytes, the multiprocessor has 232448" (dyn_bytes + static_bytes + 0x400));
   (* each buffer is its own allocation, of the power of two that holds it *)
   let acc_cols = Atom.tmem_columns (List.hd k.tmem).tcols in
   if acc_cols * nbuf > 512 then failwith "tmem columns";
@@ -1488,6 +1532,7 @@ let lower (k : kernel) : string list =
       Printf.sprintf ".grid %d 1" grid; Printf.sprintf ".mbarriers %d" !nslots
       ; Printf.sprintf ".cluster %d" (ctas k)
       ; ".tcgen05"
-      ; ".params " ^ String.concat " " (List.map (fun _ -> "8") k.params) ]
+      ; ".params " ^ String.concat " " (List.map (fun _ -> "8") k.params @ if !debug_waits then [ "8" ] else []) ]
+    @ (if !debug_waits then ".debug" :: List.rev_map (fun l -> "# " ^ l) !debug_sites else [])
   in
   header @ Sched.schedule (Sass.items b)

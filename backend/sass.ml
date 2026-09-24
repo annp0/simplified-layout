@@ -60,6 +60,7 @@ let pf = Printf.sprintf
 (* constant bank / special registers *)
 let ldc b d off = push b (I (mk ~defs:[ R d ] ~lat:Variable (pf "LDC R%d, c[0x0][%s]" d (hex off))))
 let s2r_tid b d = push b (I (mk ~defs:[ R d ] ~lat:Variable (pf "S2R R%d, SR_TID.X" d)))
+let ldc64 b d off = push b (I (mk ~defs:(regs d 2) ~lat:Variable (pf "LDC.64 R%d, c[0x0][%s]" d (hex off))))
 let ldcu64 b u off = push b (I (mk ~defs:(urs u 2) ~lat:Variable (pf "LDCU.64 UR%d, c[0x0][%s]" u (hex off))))
 let ldcu128 b u off = push b (I (mk ~defs:(urs u 4) ~lat:Variable (pf "LDCU.128 UR%d, c[0x0][%s]" u (hex off))))
 
@@ -239,6 +240,12 @@ let plop3_up b p ~up =
 
 let plop3_up0 b p = push b (I (mk ~defs:[ P p ] ~uses:[ UP 0 ] ~lat:(Fixed 13) (pf "PLOP3.LUT P%d, PT, PT, PT, UP0, 0x80, 0x8" p)))
 let nanosleep b = push b (I (mk ~lat:alu ~min_stall:5 "NANOSLEEP 0x64"))
+
+(* a failed barrier test sleeps until the barrier unit has news, as nvjet's
+   and CUTLASS's waits do, instead of asking again at once *)
+let nanosleep_syncs b ~neg p =
+  push b (I (mk ~guard:(pf "@%sP%d " (if neg then "!" else "") p) ~uses:[ P p ] ~lat:alu ~min_stall:2
+               "NANOSLEEP.SYNCS 0xc350"))
 let uvirtcount_dealloc b = push b (I (mk ~lat:alu "UVIRTCOUNT.DEALLOC.SMPOOL 0x80"))
 let utcatomsws_and b u = push b (I (mk ~late:[ UR u ] ~lat:Variable (pf "UTCATOMSWS.AND URZ, UR%d" u)))
 

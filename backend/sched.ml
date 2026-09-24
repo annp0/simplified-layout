@@ -127,7 +127,11 @@ let schedule (items : item list) : string list =
       arr;
     !changed
   in
-  let rec fix k = if pass () && k < 8 then fix (k + 1) in
+  (* until nothing changes; a schedule that has not settled can be missing a
+     wait, so running out of passes is an error, not a result *)
+  let rec fix k =
+    if pass () then if k < 64 then fix (k + 1) else failwith "Sched: the loop-carried state did not settle"
+  in
   fix 0;
   (* materialize *)
   let next_issue i =
