@@ -21,6 +21,7 @@ let rec options acc = function
   | "--clc-slots" :: n :: rest -> options { acc with Opt.clc_slots = int n } rest
   | "--epi-rows" :: n :: rest -> options { acc with Opt.epi_rows = int n } rest
   | "--ask-ahead" :: rest -> options { acc with Opt.ask_ahead = true } rest
+  | "--buf-sleep" :: n :: rest -> Lower2.buf_sleep := int n; options acc rest
   | "--direct" :: rest -> options { acc with Opt.direct = true } rest
   | "--debug-waits" :: rest -> Lower2.debug_waits := true; options acc rest
   | "--stamps" :: rest -> Lower2.stamps := true; options acc rest

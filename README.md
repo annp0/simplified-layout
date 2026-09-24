@@ -94,17 +94,20 @@ exact on the device.
 
 ### A program
 
-The GEMM as written in the DSL (`backend/dsl2.ml`). One warp feeds the ring by
-TMA, one drives the tensor core, four write the accumulator out through a
-staging tile.
+The GEMM as written in the DSL (`backend/dsl2.ml`), in the configuration
+`warpc gemm` chooses from 8192 cubed up. One warp feeds the ring by TMA, one
+drives the tensor core, four write the accumulator out, one takes tiles by
+cluster launch control.
 
     atom = Atom.umma ~ab:F16 ~acc:F32 ~m:256 ~n:256 ~ctas:2
              ~a_major:K_major ~b_major:K_major ~a_src:Smem_desc
-    (* each CTA stages the rows of each operand the atom gives it *)
+    (* each CTA stages the rows of each operand the atom gives it; A holds
+       the rows of both blocks the MMA stacks along M *)
     smem =
       [ { sname = "sa"; sdtype = F16; srows = rows_of (Atom.umma_b atom); scols = 64; ring = Stages }
-      ; { sname = "sb"; sdtype = F16; srows = rows_of (Atom.umma_a atom); scols = 64; ring = Stages }
+      ; { sname = "sb"; sdtype = F16; srows = 2 * rows_of (Atom.umma_a atom); scols = 64; ring = Stages }
       ; { sname = "sc"; sdtype = F32; srows = 8; scols = 32; ring = Per_warp 2 } ]
+    tmem = [ { tname = "acc"; trows = 128; tcols = 256; reps = 2; bufs = 1 } ]
     ...
     body =
       [ Role ([0],
@@ -116,99 +119,109 @@ staging tile.
           ; Kloop [ Wait "full"; Mma { atom; d = "acc"; a = "sb"; b = "sa" }; Commit "empty" ]
           ; Commit "ready" ])
       ; Role ([4;5;6;7],
-          [ Wait "ready"; Store { dst = "c"; src = "acc"; via = "sc"; release = Some "free" } ])
+          [ Wait "ready"; Store { dst = "c"; src = "acc"; via = Some "sc"; release = Some "free" } ])
       ; Role ([2], [ Schedule ]) ]
 
-This is cuBLAS's `nvjet_hss_128x256_64x6_2x1_2cta` (8192 cubed) as the DSL
-states it. No statement names a layout. `sa` and `sb` get theirs from the
-`Mma` that reads them, and the atom says how many of their rows each CTA of
-the pair stages; `sc` gets its layout from the tensor-map store that reads it,
-`acc` from the MMA that writes it. Because the MMA's A operand is the tile of
-`bt`, the accumulator's lanes run along the output's columns: the store
-composes the load's fragment with a transpose and the staging tile becomes
-8 x 32 f32 boxes, written by single-element stores at nvjet's addresses.
-`Schedule` is the role that takes tiles by cluster launch control; every other
-role reads its answers.
+This is cuBLAS's `nvjet_hss_256x256_64x4_2x1_2cta` as the DSL states it. No
+statement names a layout. `sa` and `sb` get theirs from the `Mma` that reads
+them, and the atom says how many of their rows each CTA of the pair stages;
+`sc` gets its layout from the tensor-map store that reads it, `acc` from the
+MMA that writes it. The MMA's A operand is the tile of `bt`, so the
+accumulator's lanes run along the output's columns, and the store composes
+the load's fragment with a transpose. `via = None` stores each warp's
+registers straight to C instead, one 128-byte store per register.
 
 ### Benchmarks
 
 fp16 inputs, fp32 accumulate, one B200. warpc runs the configuration
-`warpc gemm` chooses for the shape (below). CUTLASS is example
-70_blackwell_fp16_gemm built from source with CUDA 12.9, as shipped; its timed
-loop calls `gemm.initialize` on the host before every `gemm.run`, so its times
-include that call. cuBLAS is cuBLASLt 12.9 on the same problem (A row-major,
-B^T row-major, fp32 C, alpha 1, beta 0): every algorithm its heuristic returns
-is timed and the fastest exact one is given. The three alternate on the same
-GPU, three rounds, 50 iterations a round, timed between CUDA events on the
-device; the table gives the medians. Every warpc result equals numpy's and
-every cuBLAS result is checked exactly on sampled entries; the inputs are
-integers in [-3, 3], so the fp32 sums are exact and equality tests the
-addressing, not rounding.
+`warpc gemm` chooses for the shape (below). cuBLAS is cuBLASLt 12.9 on the
+same problem (A row-major, B^T row-major, fp32 C, alpha 1, beta 0); in the
+first round every algorithm its heuristic returns is run and the fastest exact
+one is kept for the next two. The time is each kernel's device time from nsys,
+the median of 100 launches back to back. The two alternate on the same GPU for
+three rounds and the table gives the medians. Launch overhead is not in these
+numbers, for either library. Every warpc result equals numpy's and every
+cuBLAS result is checked exactly on sampled entries; the inputs are integers
+in [-3, 3], so the fp32 sums are exact and equality tests the addressing, not
+rounding.
 
-The ceiling is measured the same way: every SM issuing back-to-back
-M = 128 tcgen05 MMAs out of shared memory, with no loads and no epilogue,
-completes 8192 FLOP per clock; at the 1852 MHz the GPU holds under that load,
-148 SMs give 2243 TFLOP/s.
+The ceiling is measured with every SM issuing back-to-back M = 128 tcgen05
+MMAs out of shared memory, with no loads and no epilogue. That completes 8192
+FLOP per clock, and at the 1852 MHz the GPU holds under that load 148 SMs give
+2243 TFLOP/s.
 
-    shape                warpc    CUTLASS     cuBLAS    warpc    cuBLAS
-                                  example              of peak  of peak
-    1024^3               317.9      253.9      345.1      14%      15%
-    1536^3               693.1      550.8      703.6      31%      31%
-    2048^3              1009.9      988.4     1043.9      45%      47%
-    4096^3              1666.4     1509.6     1720.7      74%      77%
-    4096x4096x1024      1108.8     1055.2     1194.5      49%      53%
-    3072x1280x2048       953.0      967.4      979.1      42%      44%
-    8192x2048x4096      1673.3     1481.6     1707.6      75%      76%
-    8192^3              1964.9     1253.6     1969.6      88%      88%
-    16384^3             1834.0     1268.6     1933.8      82%      86%
-                                    TFLOP/s
+    shape                  warpc      cuBLAS    warpc   cuBLAS  warpc  cuBLAS   warpc
+                                                TFLOP/s TFLOP/s of peak of peak faster
+    1024^3               4256 ns     4912 ns    504.6    437.2    22%    19%  +15.4%
+    1536^3               7520 ns     8160 ns    963.8    888.2    43%    40%   +8.5%
+    2048^3              14.05 us    14.05 us   1222.9   1222.9    55%    55%    0.0%
+    4096^3              74.91 us    75.18 us   1834.7   1828.0    82%    81%   +0.4%
+    4096x4096x1024      25.98 us    26.10 us   1322.3   1316.7    59%    59%   +0.4%
+    3072x1280x2048      13.65 us    14.05 us   1180.1   1146.5    53%    51%   +2.9%
+    8192x2048x4096      74.80 us    76.11 us   1837.4   1805.7    82%    81%   +1.8%
+    8192^3             543.86 us   558.14 us   2021.7   1969.9    90%    88%   +2.6%
+    16384^3              4.857 ms    4.725 ms  1810.8   1861.7    81%    83%   -2.7%
 
-cuBLAS's kernels are NVIDIA's nvjet kernels, not CUTLASS's: all two-CTA, on a
-cluster of 2, 4 or 8, tiles taken by cluster launch control. From 4096 cubed up
-warpc runs transcriptions of them, read from their SASS through ncu; it
-matches cuBLAS at 8192 cubed and is within 2 to 7 per cent at the other large
-shapes. The CUTLASS example is behind warpc everywhere but 3072x1280x2048. The
-configurations `warpc gemm` chooses:
+cuBLAS's kernels are NVIDIA's nvjet kernels, all two-CTA, on clusters of 2, 4
+or 8. Every configuration below is a transcription of one, read from its SASS
+and from the control words of its binary (captured through CUPTI's
+module-load callback), except the pair on 128 x 128 tiles, which came from
+CUTLASS's example. The configurations `warpc gemm` chooses:
 
-- **nvjet's 128x256, cluster launch control**, when every dimension is 8192
-  or more: a 2x1 cluster, an M = 256, N = 256 two-CTA MMA whose A operand is
-  the tile of B^T, ring depth 6, two 256-column accumulators, the epilogue in
-  8-row chunks of the transposed accumulator, and a scheduler warp cancelling
-  unlaunched clusters and handing their tiles to every role of its cluster.
-- **nvjet's 128x192, a fixed grid**, when 256-row tiles still fill the machine
-  otherwise: the same with N = 192 (a 96-row share of A per CTA, partial tiles
-  at the edges) and ring depth 7. Cluster launch control is slower here
-  (4096^3 1634, 8192x2048x4096 1625): each scheduler fills both slots of its
-  ring at once, and with five tiles a CTA the tiles it holds at the end cost
-  more than the balance gains.
-- **The two-CTA pair on CUTLASS's orientation.** An M = 256, N = 128 MMA over
-  a 2x1 cluster, 128 x 128 per CTA, ring depth 8, persistent. It is not
-  CUTLASS's program either: theirs is a 2x2 cluster, cluster launch control,
-  four 128-column accumulator stages, an alpha/beta epilogue in 128 x 16
-  subtiles, and a column-major D.
-- **One CTA per 128 x 64 tile** when 128-wide tiles would fill at most half the
-  machine: the kernel is latency there, and twice the multiprocessors win.
+- **256 x 256 a CTA** when every dimension is 8192 or more
+  (`nvjet_hss_256x256_64x4`). An M = 256, N = 256 two-CTA MMA stacked twice
+  along M, both operands' tiles of 64 columns of K, ring depth 4, one
+  512-column accumulator, tiles by cluster launch control, and the tensor-core
+  warp asking about the next stage before it issues this stage's MMAs.
+- **128 x 192** when 256-row tiles still fill the machine
+  (`nvjet_hss_128x192_64x7`). The same with N = 192 and ring depth 7, by
+  cluster launch control once K is 4096 or more and on a fixed grid below it.
+- **64 x 128, the M = 128 pair** when 128 x 128 tiles would fill at most half
+  the machine (`nvjet_hss_64x128_64x13`). Each CTA holds 64 rows of the result
+  in CuTe's 2x2 tensor-memory layout, ring depth 13, and each warp stores its
+  registers straight to C.
+- **128 x 128 on 2x2 or 2x4 clusters** when those tiles take more than one wave
+  (`nvjet_hss_128x128_64x9_2x2` and `_2x4`). The pairs of a cluster share the
+  tile of B^T, each CTA loading a slice of it and multicasting it to the
+  others; the wider cluster is taken when it needs no more waves.
+- **The pair on CUTLASS's orientation**, 128 x 128 a CTA on a 2x1 cluster,
+  ring depth 8, otherwise (1536 cubed).
 
-Three device facts the transcription needed, each found by bisection on the
-B200 and each now enforced by the lowering: a uniform register a barrier
-operation names must hold that barrier's address for the whole kernel (a
-barrier addressed at run time goes through a general register, as ptxas does
-it); the cluster-launch-control answer must be read by one 128-bit load; and a
-failed barrier test must sleep (`NANOSLEEP.SYNCS`) before trying again, or the
-two-CTA kernel at ring depth 7 hangs in most launches.
+What the transcription needed that is not in any documentation, each found on
+the B200 and each now enforced by the lowering:
+
+- A uniform register a barrier operation names must hold that barrier's
+  address for the whole kernel; a barrier addressed at run time goes through
+  a general register, as ptxas does it.
+- The cluster-launch-control answer must be read by one 128-bit load.
+- A failed barrier test must sleep (`NANOSLEEP.SYNCS`) before trying again, or
+  the two-CTA kernel at ring depth 7 hangs in most launches.
+- UTCHMMA reads its descriptor registers late. It may issue 9 cycles after the
+  add that wrote them and 2 after the previous MMA, as nvjet issues it; 6
+  cycles after the add, it reads the old descriptor.
+- Barrier initialisations need not wait for one another. The cluster's arrival
+  waits for all of them, which is what ptxas makes of
+  `fence.mbarrier_init`; chaining them cost 300 ns of every prologue.
+- A CTA may leave without meeting its cluster once every stage and accumulator
+  it handed out has come back, the pair's accumulator release going to the
+  leader alone. The cluster barrier at exit cost 600 ns.
+- A B200 holds 74, 33 and 15 clusters of 2, 4 and 8 CTAs at once, not 148
+  divided by the cluster size.
 
 ### What it is not yet
 
-- The rest of nvjet. cuBLAS's kernels at 1024 to 3072 and at 4096x4096x1024
-  use 2x2 and 2x4 clusters in this orientation (the shared operand
-  multicast), at 1024 cubed an M = 128 two-CTA MMA with 64 accumulator lanes a
-  CTA, and at 16384 cubed two MMAs a CTA along M (`256x256_64x4`); none is
-  expressible yet, so those shapes run the configurations above.
+- Faster than cuBLAS at 16384 cubed. Its 256 x 256 kernel is 2.7 per cent
+  ahead there with the same instructions, the same ring and the same
+  epilogue; at 8192 cubed the same transcription is 2.6 per cent ahead of it.
+  The tensor maps, the tile walk, the order of the MMAs and the epilogue's
+  store path have each been ruled out by measurement.
+- Faster at 2048 cubed. Both take two tiles a multiprocessor on 1.7 tiles of
+  work; removing that needs a split of K across CTAs (stream-K), which the DSL
+  cannot yet express.
 - One program. The statements are specialised to this GEMM's instructions:
   `Tma` is a 2-D box, the atom is kind::f16 with K-major operands from shared
-  memory, `Store` is tensor memory to a staging tile to a tensor-map store.
-  Only the 128-byte swizzle is supported, each further mode needing its own
-  check on the device.
+  memory, and only the 128-byte swizzle is supported, each further mode
+  needing its own check on the device.
 - No layout conversion. Nothing yet derives the staging and swizzle that
   take one fragment layout to another; the staging tile is declared.
 - The schedule is written, not searched. Roles, ring depth and warp
@@ -224,12 +237,16 @@ two-CTA kernel at ring depth 7 hangs in most launches.
     python3 backend/node/run_tma.py k.sass
 
 `warpc gemm` picks the configuration; `warpc pgemm M N K DEPTH [TILE_N]
-[--tile-m M] [--bufs B] [--cluster X Y] [--pair] [--swap] [--clc]` states it
-(`--swap`: the MMA's A operand is the tile of B^T; `--clc`: tiles by cluster
-launch control; `--debug-waits`: every wait gives up after a bounded spin and
-reports which it was). The output is SASS with a
-header naming the launch: registers, shared memory, grid, cluster, and a
-`.tmap` line per tensor map. `backend/node/sasm.py` assembles it into a cubin
+[--tile-m M] [--bufs B] [--cluster X Y] [--pair] [--swap] [--clc]
+[--ask-ahead] [--direct]` states it (`--swap`: the MMA's A operand is the tile
+of B^T; `--clc`: tiles by cluster launch control; `--ask-ahead`: the
+tensor-core warp asks about the next stage before this stage's MMAs;
+`--direct`: each warp stores its registers straight to C). `--stamps` and
+`--stage-stamps` build a kernel that writes the global timer at each phase
+boundary, or at each stage; `--debug-waits` one whose waits give up after a
+bounded spin and report which they were. The output is SASS with a header
+naming the launch: registers, shared memory, grid, cluster, and a `.tmap`
+line per tensor map (`.ptr` for a plain pointer). `backend/node/sasm.py` assembles it into a cubin
 with cupatch (silares-ai/cupatch) as the encoder; `backend/node/run_tma.py`
 encodes the tensor maps from the header, launches it, checks it against
 numpy and times it.

@@ -253,6 +253,7 @@ let operand_desc st name =
    writes which wait it was to the debug buffer (the kernel's last parameter,
    8 bytes per CTA and warp: the wait's number and its parity), and leaves.
    The header lists what each number is. *)
+let buf_sleep = ref 0xc350 (* the nanosleep of an accumulator wait -- a switch for measuring *)
 let debug_waits = ref false
 let debug_spins = 4_000_000
 let debug_sites : string list ref = ref []
@@ -343,7 +344,11 @@ let lower_wait st p ~stage ~buf =
        the barrier unit from the arrivals they wait for *)
     Sass.label st.b l;
     Sass.syncs_trywait st.b 0 ~base ~imm ~parity_reg:(Some r);
-    Sass.nanosleep_syncs st.b ~neg:true 0;
+    (* a buffer's wait -- the accumulator ready, or free -- spans a whole
+       mainloop or epilogue, and how soon the warp notices it has passed is
+       on the tile's critical path: [buf_sleep] ns at a time, or no sleep *)
+    if pp.per_buffer && !buf_sleep = 0 then ()
+    else Sass.nanosleep_syncs ~ns:(if pp.per_buffer then !buf_sleep else 0xc350) st.b ~neg:true 0;
     Sass.bra st.b ~neg:true 0 l
   end;
 

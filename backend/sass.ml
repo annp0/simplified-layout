@@ -253,9 +253,9 @@ let nanosleep b = push b (I (mk ~lat:alu ~min_stall:5 "NANOSLEEP 0x64"))
 
 (* a failed barrier test sleeps until the barrier unit has news, as nvjet's
    and CUTLASS's waits do, instead of asking again at once *)
-let nanosleep_syncs b ~neg p =
+let nanosleep_syncs ?(ns = 0xc350) b ~neg p =
   push b (I (mk ~guard:(pf "@%sP%d " (if neg then "!" else "") p) ~uses:[ P p ] ~lat:alu ~min_stall:2
-               "NANOSLEEP.SYNCS 0xc350"))
+               (pf "NANOSLEEP.SYNCS %s" (hex ns))))
 let uvirtcount_dealloc b = push b (I (mk ~lat:alu "UVIRTCOUNT.DEALLOC.SMPOOL 0x80"))
 let utcatomsws_and b u = push b (I (mk ~late:[ UR u ] ~lat:Variable (pf "UTCATOMSWS.AND URZ, UR%d" u)))
 
