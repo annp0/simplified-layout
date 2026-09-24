@@ -67,6 +67,13 @@ descriptor field and every tensor-map box is read off a layout of `lib/`:
   instruction's encoding back off a layout and compares the image it
   describes with the layout at every coordinate, so a layout the instruction
   cannot express is refused at compile time.
+- The MMA is a value too: `Atom.umma` is CuTe's `SM100_MMA_F16BF16_SS` /
+  `_2x1SM_SS` -- operand and accumulator types, M x N over the CTAs it spans,
+  its cta_group, the operands' majors and where each is read from -- with the
+  shapes CuTe accepts and CuTe's A, B and C thread-value layouts. The rows of
+  each operand a CTA stages, the rows of the result it holds, the K step and
+  the 32-bit instruction descriptor (field by field, as
+  `UMMA::InstrDescriptor`) are read off it.
 - A copy is the moving instruction's fragment composed with the storage at
   each end. The load from tensor memory is the fragment dealt over the
   accumulator's blocks (`interleave`) composed with the accumulator divided
@@ -91,10 +98,13 @@ The GEMM as written in the DSL (`backend/dsl2.ml`). One warp feeds the ring by
 TMA, one drives the tensor core, four write the accumulator out through a
 staging tile.
 
+    atom = Atom.umma ~ab:F16 ~acc:F32 ~m:256 ~n:256 ~ctas:2
+             ~a_major:K_major ~b_major:K_major ~a_src:Smem_desc
+    (* each CTA stages the rows of each operand the atom gives it *)
     smem =
-      [ { sname = "sa"; sdtype = F16; srows = tile_m; scols = tile_k; ring = Stages }
-      ; { sname = "sb"; sdtype = F16; srows = tile_n; scols = tile_k; ring = Stages }
-      ; { sname = "sc"; sdtype = F32; srows = 32;     scols = 32;     ring = Per_warp 2 } ]
+      [ { sname = "sa"; sdtype = F16; srows = rows_of (Atom.umma_b atom); scols = 64; ring = Stages }
+      ; { sname = "sb"; sdtype = F16; srows = rows_of (Atom.umma_a atom); scols = 64; ring = Stages }
+      ; { sname = "sc"; sdtype = F32; srows = 8; scols = 32; ring = Per_warp 2 } ]
     ...
     body =
       [ Role ([0],
@@ -103,16 +113,22 @@ staging tile.
                   ; Tma { dst = "sb"; src = "bt"; rows = Tile_n; pipe = "full" } ] ])
       ; Role ([1],
           [ Wait "free"
-          ; Kloop [ Wait "full"; Mma { d = "acc"; a = "sa"; b = "sb" }; Commit "empty" ]
+          ; Kloop [ Wait "full"; Mma { atom; d = "acc"; a = "sb"; b = "sa" }; Commit "empty" ]
           ; Commit "ready" ])
       ; Role ([4;5;6;7],
-          [ Wait "ready"; Store { dst = "c"; src = "acc"; via = "sc"; release = Some "free" } ]) ]
+          [ Wait "ready"; Store { dst = "c"; src = "acc"; via = "sc"; release = Some "free" } ])
+      ; Role ([2], [ Schedule ]) ]
 
-No statement names a layout. `sa` and `sb` get theirs from the `Mma` that
-reads them, `sc` from the tensor-map store that reads it, `acc` from the MMA
-that writes it; the `Tma` that fills `sa` and the warps that write `sc` are
-compiled against those layouts, and refused if the instruction cannot produce
-them.
+This is cuBLAS's `nvjet_hss_128x256_64x6_2x1_2cta` (8192 cubed) as the DSL
+states it. No statement names a layout. `sa` and `sb` get theirs from the
+`Mma` that reads them, and the atom says how many of their rows each CTA of
+the pair stages; `sc` gets its layout from the tensor-map store that reads it,
+`acc` from the MMA that writes it. Because the MMA's A operand is the tile of
+`bt`, the accumulator's lanes run along the output's columns: the store
+composes the load's fragment with a transpose and the staging tile becomes
+8 x 32 f32 boxes, written by single-element stores at nvjet's addresses.
+`Schedule` is the role that takes tiles by cluster launch control; every other
+role reads its answers.
 
 ### Benchmarks
 
@@ -136,56 +152,70 @@ completes 8192 FLOP per clock; at the 1852 MHz the GPU holds under that load,
 
     shape                warpc    CUTLASS     cuBLAS    warpc    cuBLAS
                                   example              of peak  of peak
-    1024^3               326.2      253.1      314.9      15%      14%
-    1536^3               695.1      546.2      703.6      31%      31%
-    2048^3              1011.9      979.9     1044.9      45%      47%
-    4096^3              1535.5     1508.7     1719.6      68%      77%
-    4096x4096x1024      1083.5     1051.0     1194.6      48%      53%
-    3072x1280x2048       959.9      965.8      978.8      43%      44%
-    8192x2048x4096      1579.2     1481.0     1706.0      70%      76%
-    8192^3              1753.3     1255.3     1962.7      78%      88%
-    16384^3             1623.4     1271.3     1914.6      72%      85%
+    1024^3               317.9      253.9      345.1      14%      15%
+    1536^3               693.1      550.8      703.6      31%      31%
+    2048^3              1009.9      988.4     1043.9      45%      47%
+    4096^3              1666.4     1509.6     1720.7      74%      77%
+    4096x4096x1024      1108.8     1055.2     1194.5      49%      53%
+    3072x1280x2048       953.0      967.4      979.1      42%      44%
+    8192x2048x4096      1673.3     1481.6     1707.6      75%      76%
+    8192^3              1964.9     1253.6     1969.6      88%      88%
+    16384^3             1834.0     1268.6     1933.8      82%      86%
                                     TFLOP/s
 
-cuBLAS is ahead of warpc at every shape but 1024 cubed, by 8 to 18 per cent
-from 4096 cubed up. Its kernels, at the six shapes from 2048 cubed up that were
-checked with ncu, are NVIDIA's nvjet kernels, not CUTLASS's: all two-CTA, on a
-cluster of 2 or 4 (`nvjet_hss_128x256_64x6_2x1_2cta` at 8192 cubed,
-`nvjet_hss_256x256_64x4_2x1_2cta` at 16384 cubed). The CUTLASS example is
-behind warpc everywhere but 3072x1280x2048. The configurations:
+cuBLAS's kernels are NVIDIA's nvjet kernels, not CUTLASS's: all two-CTA, on a
+cluster of 2, 4 or 8, tiles taken by cluster launch control. From 4096 cubed up
+warpc runs transcriptions of them, read from their SASS through ncu; it
+matches cuBLAS at 8192 cubed and is within 2 to 7 per cent at the other large
+shapes. The CUTLASS example is behind warpc everywhere but 3072x1280x2048. The
+configurations `warpc gemm` chooses:
 
-- **The two-CTA pair.** One MMA over a 2x1 cluster, M = 256 across the pair
-  and 128 x 128 per CTA, ring depth 8, two accumulators, persistent. The pair
-  splits both operands, so each CTA moves the operand bytes of a 128 x 256
-  tile while the grid has the granularity of a 128 x 128 one -- that is what
-  beats wave quantisation at 4096 cubed and short K. It is not CUTLASS's
-  program. Theirs is a 2x2 cluster with the same M = 256 two-CTA MMA, a
-  Cluster Launch Control scheduler (a grid of every tile, idle clusters
-  cancelling unlaunched ones and taking their tiles), four 128-column
-  accumulator stages, an alpha/beta epilogue in 128 x 16 subtiles, and a
-  column-major D.
-- **One CTA per 128 x 256 tile** when all three dimensions are 12288 or more,
-  where it beats the pair (16384^3: 1602 against 1414).
+- **nvjet's 128x256, cluster launch control**, when every dimension is 8192
+  or more: a 2x1 cluster, an M = 256, N = 256 two-CTA MMA whose A operand is
+  the tile of B^T, ring depth 6, two 256-column accumulators, the epilogue in
+  8-row chunks of the transposed accumulator, and a scheduler warp cancelling
+  unlaunched clusters and handing their tiles to every role of its cluster.
+- **nvjet's 128x192, a fixed grid**, when 256-row tiles still fill the machine
+  otherwise: the same with N = 192 (a 96-row share of A per CTA, partial tiles
+  at the edges) and ring depth 7. Cluster launch control is slower here
+  (4096^3 1634, 8192x2048x4096 1625): each scheduler fills both slots of its
+  ring at once, and with five tiles a CTA the tiles it holds at the end cost
+  more than the balance gains.
+- **The two-CTA pair on CUTLASS's orientation.** An M = 256, N = 128 MMA over
+  a 2x1 cluster, 128 x 128 per CTA, ring depth 8, persistent. It is not
+  CUTLASS's program either: theirs is a 2x2 cluster, cluster launch control,
+  four 128-column accumulator stages, an alpha/beta epilogue in 128 x 16
+  subtiles, and a column-major D.
 - **One CTA per 128 x 64 tile** when 128-wide tiles would fill at most half the
   machine: the kernel is latency there, and twice the multiprocessors win.
 
+Three device facts the transcription needed, each found by bisection on the
+B200 and each now enforced by the lowering: a uniform register a barrier
+operation names must hold that barrier's address for the whole kernel (a
+barrier addressed at run time goes through a general register, as ptxas does
+it); the cluster-launch-control answer must be read by one 128-bit load; and a
+failed barrier test must sleep (`NANOSLEEP.SYNCS`) before trying again, or the
+two-CTA kernel at ring depth 7 hangs in most launches.
+
 ### What it is not yet
 
+- The rest of nvjet. cuBLAS's kernels at 1024 to 3072 and at 4096x4096x1024
+  use 2x2 and 2x4 clusters in this orientation (the shared operand
+  multicast), at 1024 cubed an M = 128 two-CTA MMA with 64 accumulator lanes a
+  CTA, and at 16384 cubed two MMAs a CTA along M (`256x256_64x4`); none is
+  expressible yet, so those shapes run the configurations above.
 - One program. The statements are specialised to this GEMM's instructions:
-  `Tma` is a 2-D box, `Mma` is f16, K-major, `Store` is tensor memory to a
-  staging tile to a tensor-map store. Only the 128-byte swizzle is supported,
-  each further mode needing its own check on the device.
+  `Tma` is a 2-D box, the atom is kind::f16 with K-major operands from shared
+  memory, `Store` is tensor memory to a staging tile to a tensor-map store.
+  Only the 128-byte swizzle is supported, each further mode needing its own
+  check on the device.
 - No layout conversion. Nothing yet derives the staging and swizzle that
   take one fragment layout to another; the staging tile is declared.
 - The schedule is written, not searched. Roles, ring depth and warp
-  assignment are the program's, and `warpc gemm` picks among three measured
+  assignment are the program's, and `warpc gemm` picks among measured
   configurations by a rule fitted to the measurements above; registers are a
   fixed map in `lower2.ml`; `sched.ml` keeps program order and decides only
   stalls, scoreboards and wait masks.
-- A persistent kernel needs a ring depth that divides its k tiles; the ring
-  position is not yet carried across tiles, and the compiler refuses the case.
-- Shapes must be multiples of the tiles; there is no predication for ragged
-  edges.
 
 ### Running one
 
@@ -194,7 +224,10 @@ behind warpc everywhere but 3072x1280x2048. The configurations:
     python3 backend/node/run_tma.py k.sass
 
 `warpc gemm` picks the configuration; `warpc pgemm M N K DEPTH [TILE_N]
-[--bufs B] [--cluster X Y] [--pair]` states it. The output is SASS with a
+[--tile-m M] [--bufs B] [--cluster X Y] [--pair] [--swap] [--clc]` states it
+(`--swap`: the MMA's A operand is the tile of B^T; `--clc`: tiles by cluster
+launch control; `--debug-waits`: every wait gives up after a bounded spin and
+reports which it was). The output is SASS with a
 header naming the launch: registers, shared memory, grid, cluster, and a
 `.tmap` line per tensor map. `backend/node/sasm.py` assembles it into a cubin
 with cupatch (silares-ai/cupatch) as the encoder; `backend/node/run_tma.py`
