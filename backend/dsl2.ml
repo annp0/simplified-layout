@@ -86,10 +86,11 @@ type stmt =
   | Store of
       { dst : string (* a global matrix, written by tensor map *)
       ; src : string (* a tensor-memory accumulator *)
-      ; via : string
+      ; via : string option
           (* the shared tile the accumulator passes through: each warp reads
              its fragment out of tensor memory, writes it into its copy of
-             [via], and the copy engine stores that to [dst] *)
+             [via], and the copy engine stores that to [dst]; or none, and
+             each warp stores its registers to [dst] itself *)
       ; release : string option (* signalled once the accumulator has been read *)
       }
   | Schedule
@@ -193,15 +194,16 @@ type config =
   ; c_clc : bool
   ; c_ask_ahead : bool
   ; c_cluster_n : int
+  ; c_direct : bool
   }
 
 let old_config ~tile_n ~depth ~cluster ~pair =
   { c_tile_m = 128; c_tile_n = tile_n; c_depth = depth; c_cluster = cluster; c_pair = pair; c_swap = false; c_clc = false
-  ; c_ask_ahead = false; c_cluster_n = 1 }
+  ; c_ask_ahead = false; c_cluster_n = 1; c_direct = false }
 
-let swapped ?(cluster_n = 1) ~tile_m ~tile_n ~depth ~clc ~ask_ahead () =
+let swapped ?(cluster_n = 1) ?(direct = false) ~tile_m ~tile_n ~depth ~clc ~ask_ahead () =
   { c_tile_m = tile_m; c_tile_n = tile_n; c_depth = depth; c_cluster = 2; c_pair = true; c_swap = true; c_clc = clc
-  ; c_ask_ahead = ask_ahead; c_cluster_n = cluster_n }
+  ; c_ask_ahead = ask_ahead; c_cluster_n = cluster_n; c_direct = direct }
 
 (* cuBLAS's kernels at these shapes, transcribed (nvjet_hss_*_2cta, read from
    their SASS and their binaries' control words): a two-CTA MMA with B^T as
@@ -217,8 +219,11 @@ let swapped ?(cluster_n = 1) ~tile_m ~tile_n ~depth ~clc ~ask_ahead () =
      8192x2048x4096 74.8 against 76.7; with a fixed grid at 4096x4096x1024,
      26.0 against 27.2 (27.0 with the scheduler).
    - when 128 x 128 tiles would fill at most half the machine: the M = 128
-     pair, 64 x 128 a CTA, depth 13, asking ahead (nvjet_hss_64x128_64x13):
-     1024^3 4384 ns against 4960.
+     pair, 64 x 128 a CTA, depth 13, asking ahead (nvjet_hss_64x128_64x13),
+     each warp storing its registers straight to C: 1024^3 4224 ns against
+     4912. The store from the registers pays where the epilogue is the last
+     thing a CTA does; where it runs under the next tile's loads it costs
+     (2048^3 14.59 us against 14.18 through the staging tile).
    - when 128 x 128 tiles take more than one wave: 128 x 128 a CTA, depth 8,
      2 x 2 or 2 x 4 clusters whose pairs share the tile of B^T, each CTA
      loading a slice of it and multicasting it to the others
@@ -237,7 +242,7 @@ let choose ~m ~n ~k =
   else if swapped_fits
   then swapped ~tile_m:192 ~tile_n:128 ~depth:7 ~clc:(k >= 4096) ~ask_ahead:false ()
   else if 2 * tiles <= sms && n mod 128 = 0 && m mod 128 = 0 && k mod 64 = 0
-  then swapped ~tile_m:128 ~tile_n:64 ~depth:13 ~clc:false ~ask_ahead:true ()
+  then swapped ~direct:true ~tile_m:128 ~tile_n:64 ~depth:13 ~clc:false ~ask_ahead:true ()
   else if
     let waves cn = if m mod (128 * cn) = 0 then Some ((tiles / (2 * cn) + resident_clusters (2 * cn) - 1) / resident_clusters (2 * cn)) else None in
     tiles > sms && n mod 256 = 0 && k mod 64 = 0 && waves 2 <> None
@@ -248,8 +253,10 @@ let choose ~m ~n ~k =
   then old_config ~tile_n:128 ~depth:8 ~cluster:2 ~pair:true
   else old_config ~tile_n:(choose_tile_n ~m ~n ~tile_m:128) ~depth:4 ~cluster:1 ~pair:false
 
+let a_first = ref false
+
 let gemm ?(tile_m = 128) ?(tile_n = 128) ?(tile_k = 64) ?bufs ?(cluster = 1) ?(cluster_n = 1) ?(pair = false)
-    ?(swap = false) ?(clc = false) ?(clc_slots = 1) ?(epi_rows = 8) ?(ask_ahead = false) ~m ~n ~k ~depth () =
+    ?(swap = false) ?(clc = false) ?(clc_slots = 1) ?(epi_rows = 8) ?(ask_ahead = false) ?(direct = false) ~m ~n ~k ~depth () =
   (* One instruction per 16 columns of K: M rows over the CTAs it spans, N the
      accumulator's columns. [pair] asks for the CTA-pair form. [swap] makes the
      MMA's A operand the tile of B^T, as cuBLAS's nvjet kernels do: the
@@ -272,7 +279,7 @@ let gemm ?(tile_m = 128) ?(tile_n = 128) ?(tile_k = 64) ?bufs ?(cluster = 1) ?(c
   let rows_of_a () = reps * rows_of (Atom.umma_a atom) in
   { name = Printf.sprintf "pgemm_%d_%d_%d_s%d_t%d" m n k depth tile_n
   ; params =
-      [ { name = "c"; dtype = F32; rows = m; cols = n; via = Tmap }
+      [ { name = "c"; dtype = F32; rows = m; cols = n; via = (if direct then Ptr else Tmap) }
       ; { name = "a"; dtype = F16; rows = m; cols = k; via = Tmap }
       ; { name = "bt"; dtype = F16; rows = n; cols = k; via = Tmap }
       ]
@@ -283,13 +290,17 @@ let gemm ?(tile_m = 128) ?(tile_n = 128) ?(tile_k = 64) ?bufs ?(cluster = 1) ?(c
        wrong, and half of it per CTA is what makes their 230 KB of shared
        memory hold eight stages. *)
   ; smem =
-      [ { sname = "sa"; sdtype = F16; srows = (if swap then rows_of (Atom.umma_b atom) else rows_of_a ()); scols = tile_k; ring = Stages }
-      ; { sname = "sb"; sdtype = F16; srows = (if swap then rows_of_a () else rows_of (Atom.umma_b atom)); scols = tile_k; ring = Stages }
-        (* one block of the output per warp, two deep so a block is written
+      (let sa = { sname = "sa"; sdtype = F16; srows = (if swap then rows_of (Atom.umma_b atom) else rows_of_a ()); scols = tile_k; ring = Stages }
+       and sb = { sname = "sb"; sdtype = F16; srows = (if swap then rows_of_a () else rows_of (Atom.umma_b atom)); scols = tile_k; ring = Stages } in
+       (* the MMA's A operand first in a stage, then its B, as nvjet lays its
+          stages out *)
+       if swap && !a_first then [ sb; sa ] else [ sa; sb ])
+      @ if direct then [] else
+      [ (* one block of the output per warp, two deep so a block is written
            while the copy engine still reads the previous one: 32 rows by 32
            columns, or, with the accumulator transposed, 8 rows by the 32
            columns of the warp's lanes, as nvjet stages it *)
-      ; { sname = "sc"; sdtype = F32; srows = (if swap then epi_rows else 32); scols = 32; ring = Per_warp 2 }
+        { sname = "sc"; sdtype = F32; srows = (if swap then epi_rows else 32); scols = 32; ring = Per_warp 2 }
       ]
   ; depth
   ; tmem =
@@ -329,7 +340,7 @@ let gemm ?(tile_m = 128) ?(tile_n = 128) ?(tile_k = 64) ?bufs ?(cluster = 1) ?(c
       ; Role
           ( [ 1 ]
           , [ Wait "free"; Kloop [ Wait "full"; Mma { atom; d = "acc"; a = a_tile; b = b_tile }; Commit "empty" ]; Commit "ready" ] )
-      ; Role ([ 4; 5; 6; 7 ], [ Wait "ready"; Store { dst = "c"; src = "acc"; via = "sc"; release = Some "free" } ])
+      ; Role ([ 4; 5; 6; 7 ], [ Wait "ready"; Store { dst = "c"; src = "acc"; via = (if direct then None else Some "sc"); release = Some "free" } ])
       ]
       @ if clc then [ Role ([ 2 ], [ Schedule ]) ] else []
   }
@@ -337,7 +348,7 @@ let gemm ?(tile_m = 128) ?(tile_n = 128) ?(tile_k = 64) ?bufs ?(cluster = 1) ?(c
 (* the kernel a configuration is *)
 let of_config (c : config) ~m ~n ~k =
   gemm ~tile_m:c.c_tile_m ~tile_n:c.c_tile_n ~cluster:c.c_cluster ~cluster_n:c.c_cluster_n ~pair:c.c_pair ~swap:c.c_swap ~clc:c.c_clc
-    ~ask_ahead:c.c_ask_ahead ~m ~n ~k
+    ~ask_ahead:c.c_ask_ahead ~direct:c.c_direct ~m ~n ~k
     ~depth:c.c_depth ()
 
 (* a probe keeps only the shared tiles its body touches: a tile nothing reads
@@ -346,7 +357,7 @@ let only_used (k : kernel) =
   let rec names acc = function
     | Tma { dst; _ } -> dst :: acc
     | Mma { a; b; _ } -> a :: b :: acc
-    | Store { via; _ } -> via :: acc
+    | Store { via = Some via; _ } -> via :: acc
     | Kloop body | Role (_, body) -> List.fold_left names acc body
     | _ -> acc
   in
@@ -390,7 +401,7 @@ let epi_probe ~m ~n ~k =
   only_used
   { g with
     name = Printf.sprintf "pepi_%d_%d_%d_s1" m n k
-  ; body = [ Role ([ 1 ], [ Commit "ready"; Wait "free" ]); Role ([ 4; 5; 6; 7 ], [ Wait "ready"; Store { dst = "c"; src = "acc"; via = "sc"; release = Some "free" } ]) ] }
+  ; body = [ Role ([ 1 ], [ Commit "ready"; Wait "free" ]); Role ([ 4; 5; 6; 7 ], [ Wait "ready"; Store { dst = "c"; src = "acc"; via = Some "sc"; release = Some "free" } ]) ] }
 
 let dtype_string = Atom.elt_string
 let coord_string = function Tile_m -> "tile_m" | Tile_n -> "tile_n"
@@ -403,7 +414,7 @@ let rec stmt_string ind = function
   | Signal p -> ind ^ "signal " ^ p
   | Schedule -> ind ^ "take the tiles of unlaunched clusters, for every role of the cluster"
   | Store { dst; src; via; release } ->
-    Printf.sprintf "%s%s[tile] <- %s via %s%s" ind dst src via
+    Printf.sprintf "%s%s[tile] <- %s %s%s" ind dst src (match via with Some v -> "via " ^ v | None -> "from each warp's registers")
       (match release with None -> "" | Some p -> ", then " ^ p)
   | Kloop body -> Printf.sprintf "%sfor each k tile (stage = k mod depth)\n%s" ind (String.concat "\n" (List.map (stmt_string (ind ^ "  ")) body))
   | Role (ws, body) ->

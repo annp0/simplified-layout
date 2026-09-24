@@ -61,6 +61,9 @@ def assemble(path):
                 # one per tensor-map parameter, in parameter order:
                 # name rows cols elem_bytes box_rows box_cols swizzle_bytes
                 hdr.setdefault('tmap', []).append(rest.split())
+            elif key == 'ptr':
+                # a plain pointer parameter, in the same order: name rows cols elem_bytes
+                hdr.setdefault('tmap', []).append(['ptr'] + rest.split())
             else:
                 hdr[key] = rest.strip()
             continue

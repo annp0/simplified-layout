@@ -10,6 +10,7 @@ type t =
   ; clc_slots : int
   ; epi_rows : int
   ; ask_ahead : bool
+  ; direct : bool
   }
 
-let default = { bufs = None; cluster = 1; cluster_n = 1; pair = false; swap = false; tile_m = 128; clc = false; clc_slots = 1; epi_rows = 8; ask_ahead = false }
+let default = { bufs = None; cluster = 1; cluster_n = 1; pair = false; swap = false; tile_m = 128; clc = false; clc_slots = 1; epi_rows = 8; ask_ahead = false; direct = false }

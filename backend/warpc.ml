@@ -21,6 +21,7 @@ let rec options acc = function
   | "--clc-slots" :: n :: rest -> options { acc with Opt.clc_slots = int n } rest
   | "--epi-rows" :: n :: rest -> options { acc with Opt.epi_rows = int n } rest
   | "--ask-ahead" :: rest -> options { acc with Opt.ask_ahead = true } rest
+  | "--direct" :: rest -> options { acc with Opt.direct = true } rest
   | "--debug-waits" :: rest -> Lower2.debug_waits := true; options acc rest
   | "--stamps" :: rest -> Lower2.stamps := true; options acc rest
   | "--stage-stamps" :: rest -> Lower2.stage_stamps := true; options acc rest
@@ -32,6 +33,8 @@ let rec options acc = function
   | "--mma-reverse" :: rest -> Lower2.mma_reverse := true; options acc rest
   | "--mma-by-step" :: rest -> Lower2.mma_by_step := true; options acc rest
   | "--raster" :: g :: rest -> Lower2.raster_group := int g; options acc rest
+  | "--a-first" :: rest -> Dsl2.a_first := true; options acc rest
+  | "--serpentine" :: rest -> Lower2.raster_serpentine := true; options acc rest
   | "--raster-n" :: g :: rest -> Lower2.raster_group := int g; Lower2.raster_along_n := true; options acc rest
   | "--tile-m" :: t :: rest -> options { acc with Opt.tile_m = int t } rest
   | _ -> usage ()
@@ -55,7 +58,7 @@ let () =
     in
     let o = options Opt.default rest in
     let kernel =
-      Dsl2.gemm ~tile_m:o.tile_m ~tile_n ?bufs:o.bufs ~cluster:o.cluster ~cluster_n:o.cluster_n ~pair:o.pair ~swap:o.swap ~clc:o.clc ~clc_slots:o.clc_slots ~epi_rows:o.epi_rows ~ask_ahead:o.ask_ahead
+      Dsl2.gemm ~tile_m:o.tile_m ~tile_n ?bufs:o.bufs ~cluster:o.cluster ~cluster_n:o.cluster_n ~pair:o.pair ~swap:o.swap ~clc:o.clc ~clc_slots:o.clc_slots ~epi_rows:o.epi_rows ~ask_ahead:o.ask_ahead ~direct:o.direct
         ~m ~n ~k:(int k) ~depth:(int depth) ()
     in
     List.iter print_endline (Lower2.lower kernel)

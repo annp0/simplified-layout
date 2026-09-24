@@ -77,6 +77,7 @@ let ur_acc_rep = 17 (* the tensor-core warp's: a stacked block's accumulator add
 let mma_reverse = ref false (* issue a stacked MMA's blocks last first -- for bisection *)
 let raster_group = ref 8 (* the rows of tiles consecutive CTAs walk down before moving across *)
 let raster_along_n = ref false (* walk across the columns instead *)
+let raster_serpentine = ref false (* reverse every other band *)
 let mma_by_step = ref false (* interleave a stacked MMA's blocks at every k step -- for measuring *)
 
 (* Scratch for the two operand descriptor bases of the stage being issued.
@@ -212,7 +213,7 @@ let tile_layout (k : kernel) (t : stile) =
   let elem = elem_bytes t.sdtype in
   let l = Atom.swizzled_rows ~rows:t.srows ~cols:t.scols ~elem in
   let by_mma = mma_reading k t.sname in
-  let by_store = reads (function Store { via; _ } -> via = t.sname | _ -> false) k.body in
+  let by_store = reads (function Store { via = Some via; _ } -> via = t.sname | _ -> false) k.body in
   let filled = reads (function Tma { dst; _ } -> dst = t.sname | _ -> false) k.body in
   (match by_mma, by_store with
    | Some (u, which), false ->
@@ -667,6 +668,150 @@ let store_body st (p : store_plan) ~release ~buf =
     done
   done
 
+(* A store straight from the registers. With the accumulator transposed a
+   warp's lanes stand for 32 neighbouring output columns and each register
+   for an output row, so one store instruction writes 128 contiguous bytes of
+   a row: no staging tile, no fence, no copy engine, and the shared memory the
+   next tile's loads land in is left alone. The address of lane l's register r
+   is the load's fragment taken to output coordinates and through the
+   matrix's row-major layout; the blocks and their places are the staging
+   store's. *)
+type direct_plan =
+  { dp_ld : Expr.t
+  ; dp_imm_ld : int array
+  ; dp_y : Expr.t
+  ; dp_imm_y : int array
+  ; dp_x : Expr.t
+  ; dp_imm_x : int array
+  ; dp_lane : Expr.t (* a lane's byte offset in the block, over "laneid" *)
+  ; dp_reg : int array (* and each register's from it *)
+  ; dp_n : int
+  ; dp_blocks : int
+  ; dp_rep_ld : int array
+  ; dp_rep_y : int array
+  ; dp_rep_x : int array
+  ; dp_row_bytes : int (* the matrix's row pitch *)
+  }
+
+let direct_n = 32 (* registers a load: one tcgen05.ld.32x32b.x32 a block *)
+
+(* the epilogue warps' own registers for it: a one, the tile's base, the
+   block's base, the matrix's address *)
+let r_one = 144 and r_dtile = 146 and r_dblk = 148 and r_dmat = 150
+
+let direct_plan st ~dst ~src =
+  let acc = ttile st src in
+  let g = gmat st dst in
+  if g.via <> Ptr then failwith (dst ^ ": a store from the registers writes through a plain pointer");
+  let elem = elem_bytes g.dtype in
+  let lanes = Atom.ldtm_block and n = direct_n in
+  let lanes_are_cols = acc_rows_coord st.k src = Tile_n in
+  if not lanes_are_cols then failwith (dst ^ ": a store from the registers needs the lanes along the output's rows");
+  let frag = Atom.ldtm_32x32b ~n in
+  let block = Shape.Product [ Bound lanes; Bound n ] in
+  let blocks_w = acc.trows / lanes and blocks_ch = acc.tcols / n in
+  let blocked = Layout.divide ~by:block (Layout.of_linear (Linear.canonical (Product [ Bound acc.trows; Bound acc.tcols ]))) in
+  let ld =
+    Layout.compose
+      (Layout.interleave ~by:(Linear.canonical (Product [ Bound blocks_w; Bound blocks_ch ])) frag)
+      (Layout.compose blocked (acc_image st.k acc))
+  in
+  let at w ch l r = Layout.offset ld (Coord.Tuple [ Tuple [ Idx w; Idx ch ]; Tuple [ Idx l; Idx r ] ]) in
+  Atom.check_ldtm ~at ~blocks_w ~blocks_ch ~n;
+  let quarters = 4 in
+  let of_quarter =
+    Array.init quarters (fun q ->
+      List.concat_map
+        (fun w -> List.filter_map (fun ch -> if Atom.ldtm_quarter ~at w ch = q then Some (w, ch) else None) (List.init blocks_ch Fun.id))
+        (List.init blocks_w Fun.id))
+  in
+  let per_warp = List.length of_quarter.(0) in
+  if Array.exists (fun l -> List.length l <> per_warp) of_quarter then failwith (src ^ ": blocks not spread over the lane quarters");
+  let block_of q j = List.nth of_quarter.(q) j in
+  let rt = Shape.Bound quarters in
+  let w_of = function Coord.Idx w -> w | Tuple _ -> assert false in
+  let dp_ld, dp_imm_ld = split ~name:"tensor-memory load" ~rt ~n:per_warp (fun c j -> let w, ch = block_of (w_of c) j in at w ch 0 0) in
+  let out_cols = acc.trows in
+  let tile : (Space.logical, Space.logical) Layout.t =
+    Layout.compose
+      (Layout.divide ~by:block (Layout.of_linear (Linear.canonical (Product [ Bound acc.trows; Bound acc.tcols ]))))
+      (transpose ~rows:acc.trows ~cols:acc.tcols)
+  in
+  let origin_of c j = let w, ch = block_of (w_of c) j in Layout.offset tile (Coord.Tuple [ Tuple [ Idx 0; Idx 0 ]; Tuple [ Idx w; Idx ch ] ]) in
+  let dp_y, dp_imm_y = split ~name:"store row" ~rt ~n:per_warp (fun c j -> origin_of c j / out_cols) in
+  let dp_x, dp_imm_x = split ~name:"store column" ~rt ~n:per_warp (fun c j -> origin_of c j mod out_cols) in
+  (* lane l's register r, in the block's output coordinates (n rows of 32
+     columns), then through the matrix's row-major layout *)
+  let out_block = Layout.compose frag (transpose ~rows:lanes ~cols:n) in
+  let matrix = Layout.storage (Group [ Axis { size = n; stride = g.cols * elem }; Axis { size = lanes; stride = elem } ]) in
+  let addr = Layout.compose out_block matrix in
+  let dp_lane, dp_reg =
+    split ~name:"register store" ~rt:(Shape.Bound lanes) ~n (fun c r -> Layout.offset addr (Coord.Tuple [ Idx (w_of c); Idx r ]))
+  in
+  (* a warp's store is 128 contiguous bytes: its lanes one element apart *)
+  if Expr.eval dp_lane (fun _ -> 1) - Expr.eval dp_lane (fun _ -> 0) <> elem then failwith (dst ^ ": a register's store is not contiguous across the lanes");
+  Array.iter (fun d -> if abs d >= 1 lsl 23 then failwith (dst ^ ": a register's offset does not fit the store's immediate")) dp_reg;
+  let reps = acc.reps in
+  let full_rows = reps * acc.trows in
+  let rep_origin r = Layout.offset (transpose ~rows:full_rows ~cols:acc.tcols) (Coord.Tuple [ Idx (r * acc.trows); Idx 0 ]) in
+  { dp_ld; dp_imm_ld; dp_y; dp_imm_y; dp_x; dp_imm_x; dp_lane = Expr.bind "c" (Expr.var "laneid") dp_lane; dp_reg; dp_n = n
+  ; dp_blocks = per_warp; dp_rep_ld = Array.init reps (fun r -> r * acc_span st.k acc)
+  ; dp_rep_y = Array.init reps (fun r -> rep_origin r / full_rows); dp_rep_x = Array.init reps (fun r -> rep_origin r mod full_rows)
+  ; dp_row_bytes = g.cols * elem }
+
+(* once per kernel: the matrix's address in registers, a one for the wide adds *)
+let direct_setup st (_ : direct_plan) ~dst =
+  let b = st.b in
+  let i = param_index st dst in
+  Sass.mov_ur b r_dmat (ur_param i);
+  Sass.mov_ur b (r_dmat + 1) (ur_param i + 1);
+  Sass.mov_imm b r_one 1;
+  st.max_reg <- max st.max_reg (r_dmat + 1)
+
+let direct_body st (p : direct_plan) ~release ~buf =
+  let b = st.b in
+  let em = Emit.create b ~scratch in
+  let range = hw_range st and reg = hw_reg in
+  Emit.into em ~range ~reg (quarter p.dp_ld) ~dst:r_tmp2;
+  Sass.lea_ur b r_tmp2 r_tmp2 ur_acc 0;
+  Sass.r2ur b ur_epi r_tmp2;
+  (* this warp's first block, in elements of the matrix: (tile row + y) *
+     columns + tile column + x + the lane's column *)
+  let cols = p.dp_row_bytes / 4 in
+  Emit.into em ~range ~reg (quarter p.dp_y) ~dst:r_tmp;
+  Sass.lea_ur b r_tmp r_tmp ur_tile_m 0;
+  Emit.into em ~range ~reg (quarter p.dp_x) ~dst:r_cnt;
+  Sass.lea_ur b r_cnt r_cnt ur_tile_n 0;
+  Sass.imad b r_tmp r_tmp cols r_cnt;
+  Emit.into em ~range ~reg p.dp_lane ~dst:r_cnt;
+  Sass.lea b r_tmp r_tmp r_cnt 2;
+  st.max_reg <- max st.max_reg em.high;
+  (* the tile's base address: the matrix's plus that element's bytes *)
+  Sass.imad_wide b r_dtile r_tmp 1 r_dmat;
+  let reps = Array.length p.dp_rep_ld in
+  let blocks = List.concat_map (fun r -> List.init p.dp_blocks (fun j -> r, j)) (List.init reps Fun.id) in
+  let nblk = List.length blocks in
+  let n = p.dp_n in
+  let load blk =
+    let r, j = List.nth blocks blk in
+    let d = r_data.(blk mod 2) in
+    Sass.ldtm_off b d ~n ~addr:ur_epi ~imm:(p.dp_imm_ld.(j) + p.dp_rep_ld.(r));
+    st.max_reg <- max st.max_reg (d + n - 1)
+  in
+  load 0;
+  List.iteri
+    (fun blk (r, j) ->
+      let d = r_data.(blk mod 2) in
+      let off = (((p.dp_imm_y.(j) + p.dp_rep_y.(r)) * cols) + p.dp_imm_x.(j) + p.dp_rep_x.(r)) * 4 in
+      (* the block's address: the tile's plus the block's place, a wide add *)
+      Sass.imad_wide b r_dblk r_one off r_dtile;
+      for q = 0 to n - 1 do
+        Sass.stg32 b ~base:r_dblk ~imm:p.dp_reg.(q) ~data:(d + q)
+      done;
+      if blk + 1 < nblk then load (blk + 1);
+      if blk = nblk - 1 then (match release with Some rp -> release_to_pair st rp ~stage:0 ~buf | None -> ()))
+    blocks
+
 (* The first row of an operand CTA rank v loads, relative to the tile origin
    its load starts from: the atom's share of the operand, less the share of
    the result that origin already places this CTA at. The CTA-to-tile map
@@ -881,7 +1026,8 @@ let rec lower_stmt st ~stage ~buf ~(tx_done : (string, unit) Hashtbl.t) ~(tma_in
     then Sass.utcbar_mc st.b ~mbar:(commit_bar st p ~stage ~buf) ~mask
     else Sass.utcbar st.b ~mbar:(commit_bar st p ~stage ~buf)
   | Signal p -> release_to_pair st p ~stage ~buf
-  | Store { dst; src; via; release } -> store_body st (store_plan st ~dst ~src ~via) ~release ~buf
+  | Store { dst; src; via = Some via; release } -> store_body st (store_plan st ~dst ~src ~via) ~release ~buf
+  | Store { dst; src; via = None; release } -> direct_body st (direct_plan st ~dst ~src) ~release ~buf
   | Kloop body ->
     ignore buf;
     let b = st.b in
@@ -1384,7 +1530,7 @@ let lower (k : kernel) : string list =
     List.fold_left
       (fun acc s ->
         match s with
-        | Role (ws, body) when reads (function Store { via; _ } -> via = name | _ -> false) body -> acc + List.length ws
+        | Role (ws, body) when reads (function Store { via = Some via; _ } -> via = name | _ -> false) body -> acc + List.length ws
         | _ -> acc)
       0 k.body
   in
@@ -1483,6 +1629,22 @@ let lower (k : kernel) : string list =
   in
   let e_row = origin "tile row" (fun i -> i / width * k.tile_m)
   and e_col = origin "tile column" (fun i -> i mod width * k.tile_n) in
+  (* A serpentine walk: the bands of [group] cluster rows go across the
+     columns alternately forwards and backwards, so a band starts on the
+     columns the one before it ended on -- nvjet's walk reverses its odd
+     panels so. The reversal is a whole cluster at a time, the column of a
+     cluster's CTAs xored with the last cluster column's index: the columns
+     come in a power of two. *)
+  let e_col =
+    if !raster_serpentine && not along_n && pow2 tiles_n && tiles_n > 1
+    then begin
+      let band = Expr.modulo (Expr.div (Expr.div e_row k.tile_m) (group * cm)) 2 in
+      let col_tile = Expr.div e_col k.tile_n in
+      let mask = Expr.scale ((tiles_n - 1) * cn) band in
+      Expr.scale k.tile_n (Expr.xor col_tile mask)
+    end
+    else e_col
+  in
   Sass.s2r_ctaid b r_tile ~axis:"X";
   let tile_indices () =
     let em = Emit.create b ~scratch in
@@ -1696,11 +1858,17 @@ let lower (k : kernel) : string list =
            out of tiles part way through a pass skips the rest of it. *)
         (* a store's tile-invariant addresses, once, before the first tile *)
         let rec stores acc = function
-          | Store { dst; src; via; _ } -> (dst, src, via) :: acc
+          | Store { dst; src; via = Some via; _ } -> (dst, src, via) :: acc
           | Kloop b | Role (_, b) -> List.fold_left stores acc b
           | _ -> acc
         in
         List.iter (fun (dst, src, via) -> store_setup st (store_plan st ~dst ~src ~via)) (List.fold_left stores [] body);
+        let rec directs acc = function
+          | Store { dst; src; via = None; _ } -> (dst, src) :: acc
+          | Kloop b | Role (_, b) -> List.fold_left directs acc b
+          | _ -> acc
+        in
+        List.iter (fun (dst, src) -> direct_setup st (direct_plan st ~dst ~src) ~dst) (List.fold_left directs [] body);
         (* the tensor-memory users wait here for the allocation; the named
            barrier also makes its slot words visible to them *)
         if uses_tmem body then Sass.bar_sync_n b ~bar:1 ~count:(32 * tmem_warps);
@@ -1830,13 +1998,13 @@ let lower (k : kernel) : string list =
     List.filter_map
       (fun (g : gmat) ->
         if g.via <> Tmap
-        then None
+        then Some (Printf.sprintf ".ptr %s %d %d %d" g.name g.rows g.cols (elem_bytes g.dtype))
         else (
           let tiles =
             List.sort_uniq compare
               (let rec walk acc = function
                  | Tma { src; dst; _ } when src = g.name -> dst :: acc
-                 | Store { dst; via; _ } when dst = g.name -> via :: acc
+                 | Store { dst; via = Some via; _ } when dst = g.name -> via :: acc
                  | Kloop body | Role (_, body) -> List.fold_left walk acc body
                  | _ -> acc
                in
