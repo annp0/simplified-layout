@@ -27,10 +27,7 @@ let () =
   | [ _; "gemm"; m; n; k ] ->
     (* the configuration the measurements favour for this shape *)
     let m = int m and n = int n and k = int k in
-    let c = Dsl2.choose ~m ~n ~k in
-    let kernel =
-      Dsl2.gemm ~tile_n:c.c_tile_n ~cluster:c.c_cluster ~pair:c.c_pair ~m ~n ~k ~depth:c.c_depth ()
-    in
+    let kernel = Dsl2.of_config (Dsl2.choose ~m ~n ~k) ~m ~n ~k in
     List.iter print_endline (Lower2.lower kernel)
   | _ :: "pgemm" :: m :: n :: k :: depth :: rest ->
     let m = int m and n = int n in

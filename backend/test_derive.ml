@@ -143,8 +143,8 @@ let () =
         (not
            (raises (fun () ->
               Lower2.lower
-                (Dsl2.gemm ~tile_n:c.c_tile_n ~cluster:c.c_cluster ~pair:c.c_pair ~m ~n ~k ~depth:c.c_depth ())))))
+                (Dsl2.of_config c ~m ~n ~k)))))
     [ 1024, 1024, 1024; 1536, 1536, 1536; 2048, 2048, 2048; 4096, 4096, 4096; 4096, 4096, 1024; 3072, 1280, 2048
-    ; 8192, 2048, 4096; 8192, 8192, 8192 ];
+    ; 8192, 2048, 4096; 8192, 8192, 8192; 16384, 16384, 16384 ];
   if !failures > 0 then (Printf.printf "%d derivation checks failed\n" !failures; exit 1)
   else print_endline "derivations: every check passed"

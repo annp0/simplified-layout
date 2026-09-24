@@ -169,20 +169,45 @@ let choose_tile_n ~m ~n ~tile_m =
    tiles of a persistent kernel; a shape that does not fit falls back to one
    CTA. *)
 type config =
-  { c_tile_n : int
+  { c_tile_m : int
+  ; c_tile_n : int
   ; c_depth : int
   ; c_cluster : int
   ; c_pair : bool
+  ; c_swap : bool
+  ; c_clc : bool
   }
 
+let old_config ~tile_n ~depth ~cluster ~pair =
+  { c_tile_m = 128; c_tile_n = tile_n; c_depth = depth; c_cluster = cluster; c_pair = pair; c_swap = false; c_clc = false }
+
+(* cuBLAS's kernels at these shapes, transcribed (nvjet_hss_*_2x1_2cta, read
+   from their SASS): an M = 256 two-CTA MMA with B^T as its A operand, so a
+   CTA's accumulator is 128 output columns by N_mma output rows. Measured
+   against the configurations below on the same GPU:
+   - 8192 and up in every dimension: N_mma = 256, ring depth 6, tiles taken by
+     cluster launch control (nvjet_hss_128x256_64x6): 8192^3 1962 against
+     1745, 16384^3 1818 against 1668. N_mma = 192 is slower there (8192^3
+     1699, 16384^3 1340).
+   - otherwise, when 256-row tiles still fill the machine: N_mma = 192, depth
+     7, a fixed grid (nvjet_hss_128x192_64x7): 4096^3 1667 against 1519,
+     8192x2048x4096 1675 against 1562, 4096x4096x1024 1108 against 1049. Cluster
+     launch control is slower here (1634, 1625): each scheduler fills both
+     slots of its ring at once, and with five tiles a CTA the extra tiles it
+     holds at the end cost more than the balance gains. *)
 let choose ~m ~n ~k =
   let tiles = m / 128 * (n / 128) in
   let pair_fits = m mod 256 = 0 && n mod 128 = 0 && (tiles <= sms || k / 64 mod 8 = 0) in
-  if 2 * tiles <= sms && n mod 64 = 0 && m / 128 * (n / 64) <= sms
-  then { c_tile_n = 64; c_depth = 8; c_cluster = 1; c_pair = false }
+  let swapped_fits = n mod 256 = 0 && m mod 64 = 0 && k mod 64 = 0 && (m + 255) / 256 * (n / 128) >= sms in
+  if swapped_fits && min m (min n k) >= 8192
+  then { c_tile_m = 256; c_tile_n = 128; c_depth = 6; c_cluster = 2; c_pair = true; c_swap = true; c_clc = true }
+  else if swapped_fits
+  then { c_tile_m = 192; c_tile_n = 128; c_depth = 7; c_cluster = 2; c_pair = true; c_swap = true; c_clc = false }
+  else if 2 * tiles <= sms && n mod 64 = 0 && m / 128 * (n / 64) <= sms
+  then old_config ~tile_n:64 ~depth:8 ~cluster:1 ~pair:false
   else if min m (min n k) < 12288 && pair_fits
-  then { c_tile_n = 128; c_depth = 8; c_cluster = 2; c_pair = true }
-  else { c_tile_n = choose_tile_n ~m ~n ~tile_m:128; c_depth = 4; c_cluster = 1; c_pair = false }
+  then old_config ~tile_n:128 ~depth:8 ~cluster:2 ~pair:true
+  else old_config ~tile_n:(choose_tile_n ~m ~n ~tile_m:128) ~depth:4 ~cluster:1 ~pair:false
 
 let gemm ?(tile_m = 128) ?(tile_n = 128) ?(tile_k = 64) ?bufs ?(cluster = 1) ?(cluster_n = 1) ?(pair = false)
     ?(swap = false) ?(clc = false) ~m ~n ~k ~depth () =
@@ -261,6 +286,11 @@ let gemm ?(tile_m = 128) ?(tile_n = 128) ?(tile_k = 64) ?bufs ?(cluster = 1) ?(c
       ]
       @ if clc then [ Role ([ 2 ], [ Schedule ]) ] else []
   }
+
+(* the kernel a configuration is *)
+let of_config (c : config) ~m ~n ~k =
+  gemm ~tile_m:c.c_tile_m ~tile_n:c.c_tile_n ~cluster:c.c_cluster ~pair:c.c_pair ~swap:c.c_swap ~clc:c.c_clc ~m ~n ~k
+    ~depth:c.c_depth ()
 
 (* a probe keeps only the shared tiles its body touches: a tile nothing reads
    has no instruction to fix its layout *)
