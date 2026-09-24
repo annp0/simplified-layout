@@ -253,6 +253,7 @@ let operand_desc st name =
    writes which wait it was to the debug buffer (the kernel's last parameter,
    8 bytes per CTA and warp: the wait's number and its parity), and leaves.
    The header lists what each number is. *)
+let spin_empty = ref false (* the producer's stage waits spin on the try-wait -- for measuring *)
 let buf_sleep = ref 0xc350 (* the nanosleep of an accumulator wait -- a switch for measuring *)
 let debug_waits = ref false
 let debug_spins = 4_000_000
@@ -348,6 +349,7 @@ let lower_wait st p ~stage ~buf =
        mainloop or epilogue, and how soon the warp notices it has passed is
        on the tile's critical path: [buf_sleep] ns at a time, or no sleep *)
     if pp.per_buffer && !buf_sleep = 0 then ()
+    else if pp.per_stage && pp.free_at_start && !spin_empty then ()
     else Sass.nanosleep_syncs ~ns:(if pp.per_buffer then !buf_sleep else 0xc350) st.b ~neg:true 0;
     Sass.bra st.b ~neg:true 0 l
   end;
