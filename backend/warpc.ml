@@ -18,7 +18,9 @@ let rec options acc = function
   | "--pair" :: rest -> options { acc with Opt.pair = true } rest
   | "--swap" :: rest -> options { acc with Opt.swap = true } rest
   | "--clc" :: rest -> options { acc with Opt.clc = true } rest
+  | "--clc-slots" :: n :: rest -> options { acc with Opt.clc_slots = int n } rest
   | "--debug-waits" :: rest -> Lower2.debug_waits := true; options acc rest
+  | "--stamps" :: rest -> Lower2.stamps := true; options acc rest
   | "--mma-reverse" :: rest -> Lower2.mma_reverse := true; options acc rest
   | "--tile-m" :: t :: rest -> options { acc with Opt.tile_m = int t } rest
   | _ -> usage ()
@@ -26,8 +28,10 @@ let rec options acc = function
 let () =
   match Array.to_list Sys.argv with
   | [ _; "hmma"; m; n; k ] -> List.iter print_endline (Gemm.generate ~m:(int m) ~n:(int n) ~k:(int k))
-  | [ _; "gemm"; m; n; k ] ->
-    (* the configuration the measurements favour for this shape *)
+  | _ :: "gemm" :: m :: n :: k :: rest ->
+    (* the configuration the measurements favour for this shape; of the
+       options, only the build's (--stamps, --debug-waits) apply *)
+    ignore (options Opt.default rest);
     let m = int m and n = int n and k = int k in
     let kernel = Dsl2.of_config (Dsl2.choose ~m ~n ~k) ~m ~n ~k in
     List.iter print_endline (Lower2.lower kernel)
@@ -40,7 +44,7 @@ let () =
     in
     let o = options Opt.default rest in
     let kernel =
-      Dsl2.gemm ~tile_m:o.tile_m ~tile_n ?bufs:o.bufs ~cluster:o.cluster ~cluster_n:o.cluster_n ~pair:o.pair ~swap:o.swap ~clc:o.clc
+      Dsl2.gemm ~tile_m:o.tile_m ~tile_n ?bufs:o.bufs ~cluster:o.cluster ~cluster_n:o.cluster_n ~pair:o.pair ~swap:o.swap ~clc:o.clc ~clc_slots:o.clc_slots
         ~m ~n ~k:(int k) ~depth:(int depth) ()
     in
     List.iter print_endline (Lower2.lower kernel)

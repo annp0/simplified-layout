@@ -237,6 +237,36 @@ let debug_waits = ref false
 let debug_spins = 4_000_000
 let debug_sites : string list ref = ref []
 
+(* A timing build: where a warp passes a phase boundary it writes the global
+   timer's low word to the stamp buffer (the kernel's last parameter), 16
+   words a CTA, one per event. Program order is kept, so the stamp is where
+   it is emitted. *)
+let stamps = ref false
+let r_stamp = 248 (* 248: the time, 250-251: the word's address, 252: the CTA, 253: the role's tile count *)
+let stamp_names =
+  [ 0, "entry"; 1, "barriers initialised, cluster met"; 2, "producer starts"; 3, "producer done"; 4, "MMA warp starts"
+  ; 5, "MMA warp done"; 6, "epilogue starts"; 7, "epilogue: accumulator ready"; 8, "epilogue done"
+  ; 9, "MMA: first stage landed"; 10, "epilogue leaves"; 12, "producer: tile issued"; 13, "MMA: tile issued"
+  ; 14, "epilogue: tile stored" ]
+
+(* 64 words a CTA: the events of its first four tiles, 16 each, a tile's
+   events at 16 x (the role's tile count mod 4) *)
+let stamp st ev =
+  if !stamps then begin
+    let b = st.b in
+    Sass.s2r_timer b r_stamp;
+    Sass.ldc64 b (r_stamp + 2) (0x380 + (8 * List.length st.k.params));
+    Sass.s2r_ctaid b (r_stamp + 4) ~axis:"X";
+    Sass.imad_wide b (r_stamp + 2) (r_stamp + 4) 256 (r_stamp + 2);
+    Sass.lop3_and b (r_stamp + 1) (r_stamp + 5) 3;
+    Sass.imad_wide b (r_stamp + 2) (r_stamp + 1) 64 (r_stamp + 2);
+    Sass.stg32 b ~base:(r_stamp + 2) ~imm:(4 * ev) ~data:r_stamp;
+    st.max_reg <- max st.max_reg (r_stamp + 5)
+  end
+
+let stamp_count_reset st = if !stamps then Sass.mov_imm st.b (r_stamp + 5) 0
+let stamp_count_next st = if !stamps then Sass.iadd3_c st.b (r_stamp + 5) (r_stamp + 5) 1
+
 let lower_wait st p ~stage ~buf =
   let pp = pipe st p in
   let r = r_parity.(Hashtbl.find st.pipe_index p) in
@@ -586,7 +616,9 @@ let commit_bar st p ~stage ~buf =
     ur_tmp
 
 let rec lower_stmt st ~stage ~buf ~(tx_done : (string, unit) Hashtbl.t) ~(tma_index : int ref) = function
-  | Wait p -> lower_wait st p ~stage ~buf
+  | Wait p ->
+    lower_wait st p ~stage ~buf;
+    if p = "ready" then stamp st 7
   | Tma { dst; src; rows; pipe = p } ->
     let b = st.b in
     (* A two-CTA MMA reads both CTAs' stages, so the stage is full only when
@@ -611,20 +643,22 @@ let rec lower_stmt st ~stage ~buf ~(tx_done : (string, unit) Hashtbl.t) ~(tma_in
     let g = ur_tma.(!tma_index) in
     incr tma_index;
     let base = Hashtbl.find st.smem_dyn dst + (stage * st.stage_bytes) in
-    (* In a cluster every operand is needed by more than one CTA: the rows by
-       the pairs working on neighbouring columns, the columns by the two CTAs a
-       pair splits its rows over. One CTA of each group issues the load and
-       multicasts it, so the bytes cross the memory system once per group
-       instead of once per CTA, and the copy lands at the same offset in every
-       CTA the mask names. *)
+    (* In a cluster every operand is needed by more than one CTA: the MMA's A
+       rows by the pairs working on neighbouring blocks of the other output
+       coordinate, its B rows by the CTAs a one-CTA MMA's cluster splits A
+       over. One CTA of each group issues the load and multicasts it, so the
+       bytes cross the memory system once per group instead of once per CTA,
+       and the copy lands at the same offset in every CTA the mask names. *)
+    let operand = match mma_reading st.k dst with Some (_, w) -> w | None -> failwith (dst ^ ": no MMA reads it") in
+    ignore rows;
     let group =
-      match rows with
-      | Tile_m -> st.k.cluster_n (* the pairs working on neighbouring columns *)
-      | Tile_n -> if two_cta st then 1 (* the pair splits the columns, so nobody shares *) else st.k.cluster
+      match operand with
+      | `A -> st.k.cluster_n
+      | `B -> if two_cta st then 1 (* the pair splits B's rows, so nobody shares *) else st.k.cluster
     in
     if grid_cluster st.k && group > 1
     then begin
-      let mask, guard = match rows with Tile_m -> (ur_mask_a, up_issue_a) | Tile_n -> (ur_mask_b, up_issue_b) in
+      let mask, guard = match operand with `A -> (ur_mask_a, up_issue_a) | `B -> (ur_mask_b, up_issue_b) in
       Sass.uiadd3 b g ur_smem base;
       (match bar_of p with
        | `Own (r, imm) -> Sass.uiadd3 b (g + 1) r imm
@@ -768,6 +802,10 @@ let rec lower_stmt st ~stage ~buf ~(tx_done : (string, unit) Hashtbl.t) ~(tma_in
         waited
     in
     st.mma_seen <- 0;
+    (* the timing build notes when the tile's first stage has landed: a second
+       wait on a phase that has completed passes at once *)
+    if !stamps && List.mem "full" waited && List.exists (function Mma _ -> true | _ -> false) body
+    then (lower_wait st "full" ~stage:s0 ~buf; stamp st 9);
     for stage = s0 to s0 + head - 1 do
       emit_stage stage
     done;
@@ -923,7 +961,7 @@ let clc_take st ~slot ~last ~tl_end =
   let b = st.b and n_ctas = ctas st.k in
   wait_slot st ~addr:r_clc_addr ~slot:(st.clc_full + slot) ~parity:r_clc;
   read_answer st ~addr:r_clc_addr ~off:(st.clc_resp + (16 * slot)) ~first:(Some r_tile) ~valid:r_resp;
-  if n_ctas > 1 then Sass.lea_ur b r_tile r_tile ur_rank_x 0;
+  if n_ctas > 1 then Sass.lea_ur b r_tile r_tile ur_cta 0;
   if n_ctas > 1
   then begin
     (* the CTA field of a shared::cluster address is the rank: 0 is the first *)
@@ -1213,6 +1251,8 @@ let lower (k : kernel) : string list =
   Sass.s2ur_cta b ur_cta;
   Sass.umov b ur_tmp 0x400;
   Sass.ulea b ur_smem ur_cta ur_tmp 0x18;
+  stamp_count_reset st;
+  stamp st 0;
   (* The tile a CTA owns. The map from a CTA index to a tile is a layout: the
      index's digits -- the CTA's rank in its cluster, its place in a group of
      rows, the column, the group -- name the tile, so consecutive CTAs walk
@@ -1224,9 +1264,8 @@ let lower (k : kernel) : string list =
      rows stand for: down the rows, or -- when the MMA's A operand is the
      second matrix -- across the columns. *)
   let cluster_on_cols = match k.tmem with t :: _ -> acc_rows_coord k t.tname = Tile_n | [] -> false in
-  if cluster_on_cols && k.cluster_n > 1 then failwith "a cluster along the columns has no second axis yet";
   let tiles_m, tiles_n =
-    if cluster_on_cols then k.tile_m_count, k.tile_n_count / k.cluster
+    if cluster_on_cols then k.tile_m_count / k.cluster_n, k.tile_n_count / k.cluster
     else k.tile_m_count / k.cluster, k.tile_n_count / k.cluster_n
   in
   let group =
@@ -1240,9 +1279,10 @@ let lower (k : kernel) : string list =
       (Group
          (if cluster_on_cols
           then
-            [ Axis { size = tiles_m / group; stride = group * width }
+            [ Axis { size = tiles_m / group; stride = group * k.cluster_n * width }
             ; Axis { size = tiles_n; stride = k.cluster }
-            ; Axis { size = group; stride = width }
+            ; Axis { size = group; stride = k.cluster_n * width }
+            ; Axis { size = k.cluster_n; stride = width }
             ; Axis { size = k.cluster; stride = 1 }
             ]
           else
@@ -1283,14 +1323,15 @@ let lower (k : kernel) : string list =
   Sass.umov b ur_mask_plain ((1 lsl ctas k) - 1);
   if grid_cluster k
   then begin
-    (* rank x picks the half of the rows this CTA holds, rank y the columns *)
+    (* rank x picks the share of the atom's rows this CTA holds, rank y the
+       pair's block of the other output coordinate *)
     Sass.ulop3_and b ur_rank_x ur_cta (k.cluster - 1);
     Sass.ushf_r b ur_rank_y ur_cta (log2 k.cluster);
-    (* the row group: every CTA holding these rows, one per pair *)
+    (* the A group: every CTA holding this share of A's rows, one per pair *)
     let row_bits = List.init k.cluster_n (fun j -> 1 lsl (j * k.cluster)) in
     Sass.umov b ur_mask_a (List.fold_left ( lor ) 0 row_bits);
     Sass.ushf_l_ur b ur_mask_a ur_mask_a ur_rank_x;
-    (* the column group: the pair itself *)
+    (* the B group: the pair itself *)
     Sass.umov b ur_mask_b_plain ((1 lsl k.cluster) - 1);
     Sass.ushf_l b ur_tmp ur_rank_y (log2 k.cluster);
     Sass.ushf_l_ur b ur_mask_b_plain ur_mask_b_plain ur_tmp;
@@ -1378,13 +1419,14 @@ let lower (k : kernel) : string list =
   if clc then begin
     (* An answer is awaited by one arrival -- the scheduler's, stating the 16
        bytes to come -- and read by every warp that takes tiles, across the
-       cluster: in a pair only the leader's tensor-core warp takes them. *)
+       cluster: in a pair only the leader's tensor-core warp takes them, one
+       per pair of the cluster. *)
     let takers =
       List.fold_left
         (fun acc s ->
           match s with
           | Role (ws, body) when not (List.mem Schedule body) ->
-            let ctas_taking = if two_cta st && reads (function Mma _ -> true | _ -> false) body then 1 else ctas k in
+            let ctas_taking = if two_cta st && reads (function Mma _ -> true | _ -> false) body then k.cluster_n else ctas k in
             acc + (List.length ws * ctas_taking)
           | _ -> acc)
         0 k.body
@@ -1402,13 +1444,15 @@ let lower (k : kernel) : string list =
       [ clc_full, 1; clc_empty, takers ]
   end;
   Sass.label b "INIT_DONE";
-  Sass.membar_cta b;
-  Sass.fence_view_async b;
-  Sass.bar_sync b;
   (* A CTA arrives on its partners' barriers, so none may start before every
-     CTA of the cluster has initialised its own: the cluster meets here, as
-     nvjet's kernels do (UCGABAR_ARV / UCGABAR_WAIT after the inits). *)
-  if grid_cluster k then Sass.cluster_sync b;
+     CTA of the cluster has initialised its own. The arrival publishes this
+     CTA's, once every initialisation has completed, and the wait comes after
+     the allocation below, just before the roles: nvjet's UCGABAR_ARV and
+     UCGABAR_WAIT, and what ptxas makes of fence.mbarrier_init with a cluster
+     barrier -- no memory barrier, no fence (ref/binit.ptx). Without a cluster
+     the CTA's barrier does the same. *)
+  if grid_cluster k then Sass.cluster_arrive_inits b else Sass.bar_sync_inits b;
+  stamp st 1;
   (* The barriers are visible to every warp from here, so the producer starts
      loading now; tensor memory is allocated meanwhile, and only the warps that
      use it wait for it, at the start of their roles. *)
@@ -1421,6 +1465,7 @@ let lower (k : kernel) : string list =
   done;
   Sass.uvirtcount_dealloc b;
   Sass.label b "ALLOC_DONE";
+  if grid_cluster k then Sass.cluster_wait b;
   (* the roles whose warps touch tensor memory: the MMA's and the store's *)
   let uses_tmem body = reads (function Mma _ | Store _ | Commit _ -> true | _ -> false) body in
   let tmem_warps =
@@ -1479,6 +1524,12 @@ let lower (k : kernel) : string list =
         (* the tensor-memory users wait here for the allocation; the named
            barrier also makes its slot words visible to them *)
         if uses_tmem body then Sass.bar_sync_n b ~bar:1 ~count:(32 * tmem_warps);
+        let ev_start, ev_end =
+          if reads (function Store _ -> true | _ -> false) body then 6, 8
+          else if reads (function Mma _ -> true | _ -> false) body then 4, 5
+          else 2, 3
+        in
+        stamp st ev_start;
         let tl = new_label st "TILES" in
         let tl_end = new_label st "TILES_END" in
         (* In a pair, the MMA and every stage barrier it waits on are the
@@ -1508,6 +1559,8 @@ let lower (k : kernel) : string list =
           tile_indices ();
           if uses_tmem body then buffer_base st ~buf ~into:ur_acc;
           List.iter (lower_stmt st ~stage:0 ~buf ~tx_done:(Hashtbl.create 1) ~tma_index:(ref 0)) body;
+          stamp st (ev_start / 2 + 11);
+          stamp_count_next st;
           if clc
           then clc_take st ~slot:(u mod clc_slots) ~last:(u mod clc_slots = clc_slots - 1) ~tl_end
           else Sass.iadd3_c b r_tile r_tile grid;
@@ -1536,9 +1589,11 @@ let lower (k : kernel) : string list =
         (* a warp's last tensor-map stores must have read its staging copies
            before the warp leaves the shared memory they sit in *)
         if reads (function Store _ -> true | _ -> false) body then Sass.depbar_drain b;
+        stamp st ev_end;
         if uses_tmem body then Sass.bar_sync_n b ~bar:1 ~count:(32 * tmem_warps);
         if lo <= alloc_warp && alloc_warp <= hi then dealloc st;
         if grid_cluster k then Sass.cluster_barrier b;
+        if ev_start = 6 then stamp st 10;
         Sass.exit b;
         Sass.label b skip
       | _ -> failwith "top level must be roles")
@@ -1589,7 +1644,8 @@ let lower (k : kernel) : string list =
       Printf.sprintf ".grid %d 1" grid; Printf.sprintf ".mbarriers %d" !nslots
       ; Printf.sprintf ".cluster %d" (ctas k)
       ; ".tcgen05"
-      ; ".params " ^ String.concat " " (List.map (fun _ -> "8") k.params @ if !debug_waits then [ "8" ] else []) ]
+      ; ".params " ^ String.concat " " (List.map (fun _ -> "8") k.params @ if !debug_waits || !stamps then [ "8" ] else []) ]
     @ (if !debug_waits then ".debug" :: List.rev_map (fun l -> "# " ^ l) !debug_sites else [])
+    @ (if !stamps then ".debug" :: ".stamps" :: List.map (fun (i, s) -> Printf.sprintf "# stamp %d: %s" i s) stamp_names else [])
   in
   header @ Sched.schedule (Sass.items b)

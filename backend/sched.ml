@@ -87,12 +87,18 @@ let schedule (items : item list) : string list =
              List.iter
                (fun r -> match r, Hashtbl.find_opt issued r with UR _, Some at -> t := max !t (at + delay) | _ -> ())
                (ins.uses @ ins.late_uses));
+          (* token 4 collects outstanding barrier initialisations: several
+             define it at once, none waits for another, and a user waits for
+             them all *)
+          let accumulates r = r = Tok 4 in
           List.iter
             (fun r ->
-              need_wait pw r;
-              need_wait pr r;
-              need_ready r;
-              match Hashtbl.find_opt hold r with Some c -> t := max !t c | None -> ())
+              if not (accumulates r) then begin
+                need_wait pw r;
+                need_wait pr r;
+                need_ready r;
+                match Hashtbl.find_opt hold r with Some c -> t := max !t c | None -> ()
+              end)
             ins.defs;
           (* a fence or barrier waits for every outstanding late read: the stores
              before it must have taken their data before it takes effect *)
@@ -130,13 +136,16 @@ let schedule (items : item list) : string list =
           prev_var := scoreboarded;
           List.iter
             (fun r ->
-              Hashtbl.remove ready r; Hashtbl.remove hold r; Hashtbl.remove pw r;
-              Hashtbl.remove issued r;
-              match ins.lat with
-              | Fixed l ->
-                Hashtbl.replace ready r (!t + l);
-                (match r with UR _ -> Hashtbl.replace issued r !t | _ -> ())
-              | Variable -> Hashtbl.replace pw r (1 lsl wb))
+              if accumulates r then Hashtbl.replace pw r (find0 pw r lor (1 lsl wb))
+              else begin
+                Hashtbl.remove ready r; Hashtbl.remove hold r; Hashtbl.remove pw r;
+                Hashtbl.remove issued r;
+                match ins.lat with
+                | Fixed l ->
+                  Hashtbl.replace ready r (!t + l);
+                  (match r with UR _ -> Hashtbl.replace issued r !t | _ -> ())
+                | Variable -> Hashtbl.replace pw r (1 lsl wb)
+              end)
             ins.defs;
           if rb <> 7 then List.iter (fun r -> Hashtbl.replace pr r (find0 pr r lor (1 lsl rb))) ins.late_uses;
           if ins.src_hold > 0 then List.iter (fun r -> Hashtbl.replace hold r (!t + ins.src_hold)) ins.uses;

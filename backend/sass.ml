@@ -60,6 +60,7 @@ let pf = Printf.sprintf
 (* constant bank / special registers *)
 let ldc b d off = push b (I (mk ~defs:[ R d ] ~lat:Variable (pf "LDC R%d, c[0x0][%s]" d (hex off))))
 let s2r_tid b d = push b (I (mk ~defs:[ R d ] ~lat:Variable (pf "S2R R%d, SR_TID.X" d)))
+let s2r_timer b d = push b (I (mk ~defs:[ R d ] ~lat:Variable (pf "S2R R%d, SR_GLOBALTIMERLO" d)))
 let ldc64 b d off = push b (I (mk ~defs:(regs d 2) ~lat:Variable (pf "LDC.64 R%d, c[0x0][%s]" d (hex off))))
 let ldcu64 b u off = push b (I (mk ~defs:(urs u 2) ~lat:Variable (pf "LDCU.64 UR%d, c[0x0][%s]" u (hex off))))
 let ldcu128 b u off = push b (I (mk ~defs:(urs u 4) ~lat:Variable (pf "LDCU.128 UR%d, c[0x0][%s]" u (hex off))))
@@ -212,8 +213,15 @@ let bar_sync_n b ~bar ~count =
 
 let bar_addr base imm = if imm = 0 then pf "[UR%d]" base else pf "[UR%d+%s]" base (hex imm)
 
+(* A barrier's initialisation completes on a scoreboard of its own and none
+   waits for another: they all add to token 4, and what publishes them -- the
+   cluster's arrival, or the CTA's barrier -- waits for every one (ptxas's
+   fence.mbarrier_init: no instruction, the arrival's wait mask covering each
+   exchange's scoreboard; ref/binit.ptx). *)
+let tok_inits = Tok 4
+
 let syncs_exch b ~base ~imm ~v =
-  push b (I (mk ~defs:[ Tok 0 ] ~uses:[ Tok 0 ] ~late:[ UR base; UR v; UR (v + 1) ] ~lat:Variable
+  push b (I (mk ~defs:[ tok_inits ] ~late:[ UR base; UR v; UR (v + 1) ] ~lat:Variable
                (pf "SYNCS.EXCH.64 URZ, %s, UR%d" (bar_addr base imm) v)))
 
 (* the operands of a spin wait are never rewritten inside the loop, so they
@@ -318,6 +326,16 @@ let cluster_barrier b =
 (* the cluster meeting alone, without the memory barriers of an exit *)
 let cluster_sync b =
   List.iter (fun t -> push b (I (mk ~lat:(Fixed 6) ~drain:true ~min_stall:6 t))) [ "UCGABAR_ARV"; "UCGABAR_WAIT" ]
+
+(* The meeting split in two, as ptxas and nvjet place it: the arrival once
+   the barriers are initialised -- it publishes them to the cluster -- and the
+   wait just before the first use of a barrier, with the work between. *)
+let cluster_arrive_inits b = push b (I (mk ~uses:[ tok_inits ] ~lat:(Fixed 6) ~drain:true ~min_stall:6 "UCGABAR_ARV"))
+let cluster_wait b = push b (I (mk ~lat:(Fixed 6) ~drain:true ~min_stall:6 "UCGABAR_WAIT"))
+
+(* without a cluster, the CTA's barrier publishes the initialisations *)
+let bar_sync_inits b =
+  push b (I (mk ~defs:[ Tok 0 ] ~uses:[ Tok 0; tok_inits ] ~lat:(Fixed 6) ~min_stall:6 ~drain:true "BAR.SYNC.DEFER_BLOCKING 0x0"))
 
 let syncs_arrive_red b ~guard ~base ~imm =
   push b (I (mk ~guard:(pf "@P%d " guard) ~uses:[ P guard ] ~late:[ UR base ] ~lat:Variable

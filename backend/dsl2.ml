@@ -213,7 +213,7 @@ let choose ~m ~n ~k =
   else old_config ~tile_n:(choose_tile_n ~m ~n ~tile_m:128) ~depth:4 ~cluster:1 ~pair:false
 
 let gemm ?(tile_m = 128) ?(tile_n = 128) ?(tile_k = 64) ?bufs ?(cluster = 1) ?(cluster_n = 1) ?(pair = false)
-    ?(swap = false) ?(clc = false) ~m ~n ~k ~depth () =
+    ?(swap = false) ?(clc = false) ?(clc_slots = 1) ~m ~n ~k ~depth () =
   (* One instruction per 16 columns of K: M rows over the CTAs it spans, N the
      accumulator's columns. [pair] asks for the CTA-pair form. [swap] makes the
      MMA's A operand the tile of B^T, as cuBLAS's nvjet kernels do: the
@@ -284,7 +284,7 @@ let gemm ?(tile_m = 128) ?(tile_n = 128) ?(tile_k = 64) ?bufs ?(cluster = 1) ?(c
        the one the measurements favour *)
   ; cluster
   ; cluster_n
-  ; tiles = (if clc then Clc 2 else Stride)
+  ; tiles = (if clc then Clc clc_slots else Stride)
   ; tile_m; tile_n; tile_k; k_total = k; tile_m_count = (m + tile_m - 1) / tile_m
   ; tile_n_count = (n + tile_n - 1) / tile_n
   ; body =
