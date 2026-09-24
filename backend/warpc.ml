@@ -19,6 +19,7 @@ let rec options acc = function
   | "--swap" :: rest -> options { acc with Opt.swap = true } rest
   | "--clc" :: rest -> options { acc with Opt.clc = true } rest
   | "--debug-waits" :: rest -> Lower2.debug_waits := true; options acc rest
+  | "--mma-reverse" :: rest -> Lower2.mma_reverse := true; options acc rest
   | "--tile-m" :: t :: rest -> options { acc with Opt.tile_m = int t } rest
   | _ -> usage ()
 
@@ -52,7 +53,8 @@ let () =
     (* three switches: register-addressed barriers, a wide answer read, cluster-form operands *)
     Lower2.clc_style := { gpr_bars = style.[0] = '1'; wide = style.[1] = '1'; cluster_ops = style.[2] = '1' };
     List.iter print_endline (Lower2.clc_loop_probe ~first:(int f) ())
-  | [ _; "talloc"; n ] -> List.iter print_endline (Lower2.tmem_probe ~ncols:(int n) ~times:1)
-  | [ _; "talloc"; n; t ] -> List.iter print_endline (Lower2.tmem_probe ~ncols:(int n) ~times:(int t))
+  | [ _; "talloc"; n ] -> List.iter print_endline (Lower2.tmem_probe ~ncols:(int n) ~times:1 ())
+  | [ _; "talloc"; n; "clear" ] -> List.iter print_endline (Lower2.tmem_probe ~clear:true ~ncols:(int n) ~times:1 ())
+  | [ _; "talloc"; n; t ] -> List.iter print_endline (Lower2.tmem_probe ~ncols:(int n) ~times:(int t) ())
   | [ _; "umma"; m; n; k ] -> List.iter print_endline (Lower.lower (Dsl.gemm ~m:(int m) ~n:(int n) ~k:(int k)))
   | _ -> usage ()

@@ -103,6 +103,8 @@ def run(path, M, N, K, repeat=20, seed=1):
             print('   %4d x  %s  parity %#x  (cta.warp %s)' % (n, sites.get('wait %d' % wid, '?'), par, ', '.join('%d.%d' % (i // 8, i % 8) for i in ex)))
     C = np.frombuffer(ctx.read_bytes(dC, M * N * 4), dtype=np.float32).reshape(M, N)
     bad = np.argwhere(np.abs(C - ref) > 1e-3)
+    if os.environ.get('WARPC_DUMP'):
+        np.save(os.environ['WARPC_DUMP'], np.stack([C, ref]))
     # the first launch has finished and been checked; say so before timing,
     # which launches again, so a hang is attributed to the right launch
     print('first launch done, %d wrong' % len(bad), file=sys.stderr, flush=True)

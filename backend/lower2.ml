@@ -60,6 +60,8 @@ let ur_st = 44 (* the store group, only live in the epilogue *)
 let ur_esrc = 23 (* this warp's copy of the staging tile *)
 let ur_ey = 0 (* the row coordinate of this warp's blocks *)
 let ur_ex = 17 (* and the column coordinate *)
+let ur_acc_rep = 17 (* the tensor-core warp's: a stacked block's accumulator address *)
+let mma_reverse = ref false (* issue a stacked MMA's blocks last first -- for bisection *)
 
 (* Scratch for the two operand descriptor bases of the stage being issued.
    Keeping one per stage would cost a register per stage and the pipeline needs
@@ -119,6 +121,17 @@ let mma_reading (k : kernel) name =
   | [] -> None
   | [ x ] -> Some x
   | _ -> failwith (name ^ ": read by more than one MMA operand")
+
+(* the blocks the MMA reading [name] stacks along its rows: its accumulator's *)
+let mma_reps (k : kernel) name =
+  let rec walk acc = function
+    | Mma { d; a; b; _ } when a = name || b = name -> d :: acc
+    | Kloop body | Role (_, body) -> List.fold_left walk acc body
+    | _ -> acc
+  in
+  match List.sort_uniq compare (List.fold_left walk [] k.body) with
+  | [ d ] -> (List.find (fun (t : ttile) -> t.tname = d) k.tmem).reps
+  | _ -> 1
 
 (* the rows of an operand, or of the result, the atom gives CTA [v] *)
 let share_rows (u : Atom.umma) which ~v =
@@ -192,7 +205,8 @@ let tile_layout (k : kernel) (t : stile) =
      if (match which with `A -> u.a_major | `B -> u.b_major) <> Atom.K_major
      then failwith (t.sname ^ ": only K-major operands are lowered");
      if t.sdtype <> u.ab then failwith (t.sname ^ ": the tile's type is not the MMA's operand type");
-     let rows = snd (share_rows u (which :> [ `A | `B | `C ]) ~v:0) in
+     (* A holds the rows of every block the MMA stacks, block after block *)
+     let rows = snd (share_rows u (which :> [ `A | `B | `C ]) ~v:0) * (match which with `A -> mma_reps k t.sname | `B -> 1) in
      if t.srows <> rows then failwith (Printf.sprintf "%s: the atom gives each CTA %d rows, the tile has %d" t.sname rows t.srows);
      ignore (Atom.umma_kmajor l ~elem ~mma_k:(Atom.umma_k u))
    | None, true -> ignore (Atom.tma_box l ~elem)
@@ -367,6 +381,9 @@ type store_plan =
   ; copy : int
   ; copies : int
   ; blocks_ch : int
+  ; rep_ld : int array (* per stacked block: its tensor-memory offset *)
+  ; rep_y : int array (* and its offset in the output tile *)
+  ; rep_x : int array
   }
 
 let store_plan st ~dst ~src ~via =
@@ -438,10 +455,21 @@ let store_plan st ~dst ~src ~via =
   let origin w ch = Layout.offset tile (Coord.Tuple [ Tuple [ Idx 0; Idx 0 ]; Tuple [ Idx w; Idx ch ] ]) in
   let e_y, imm_y = split ~name:"store row" ~rt ~n:blocks_ch (fun c ch -> origin (w_of c) ch / out_cols) in
   let e_x, imm_x = split ~name:"store column" ~rt ~n:blocks_ch (fun c ch -> origin (w_of c) ch mod out_cols) in
+  (* A stacked MMA's block r is the same accumulator r * tcols columns on,
+     and in the output it is the block of rows r * trows of the MMA's rows on:
+     where those land is read off the whole accumulator taken to output
+     coordinates. *)
+  let reps = acc.reps in
+  let full_rows = reps * acc.trows in
+  let full_out_cols = if lanes_are_cols then full_rows else acc.tcols in
+  let rep_origin r = Layout.offset (to_out ~rows:full_rows ~cols:acc.tcols) (Coord.Tuple [ Idx (r * acc.trows); Idx 0 ]) in
+  let rep_ld = Array.init reps (fun r -> r * acc.tcols) in
+  let rep_y = Array.init reps (fun r -> rep_origin r / full_out_cols) in
+  let rep_x = Array.init reps (fun r -> rep_origin r mod full_out_cols) in
   (* the warp's copies of the staging tile *)
   let e_copy = Expr.scale (copies * copy) (Expr.var "c") in
   { sp_dst = dst; e_ld; imm_ld; e_copy; e_y; imm_y; e_x; imm_x; sts; sp_n = n; vec; sp_elem = elem; copy; copies
-  ; blocks_ch }
+  ; blocks_ch; rep_ld; rep_y; rep_x }
 
 let quarter e = Expr.bind "c" (Expr.modulo (Expr.var "warpid") 4) e
 
@@ -491,9 +519,14 @@ let store_body st (p : store_plan) ~release ~buf =
   st.max_reg <- max st.max_reg em.high;
   let imm_ld = p.imm_ld and imm_x = p.imm_x and imm_y = p.imm_y and blocks_n = p.blocks_ch in
   let dst = p.sp_dst in
+  let reps = Array.length p.rep_ld in
+  for r = 0 to reps - 1 do
     for ch = 0 to blocks_n - 1 do
-      let d = r_data.(ch mod 2) and slot = ch mod copies in
-      Sass.ldtm_off b d ~n ~addr:ur_epi ~imm:imm_ld.(ch);
+      (* the staging copies and the load registers alternate over every block
+         of the tile, stacked blocks included *)
+      let blk = (r * blocks_n) + ch in
+      let d = r_data.(blk mod 2) and slot = blk mod copies in
+      Sass.ldtm_off b d ~n ~addr:ur_epi ~imm:(imm_ld.(ch) + p.rep_ld.(r));
       st.max_reg <- max st.max_reg (d + n - 1);
       (* The copy this block goes into was last read by the store [copies]
          blocks back -- in this tile or the previous one. Stores finish in
@@ -506,7 +539,7 @@ let store_body st (p : store_plan) ~release ~buf =
       (* the stores have taken the last block's values, so the load that
          produced them has landed: the accumulator is free for the next tile's
          MMAs while its last blocks are still being written out *)
-      if ch = blocks_n - 1 then (match release with Some p -> release_to_pair st p ~stage:0 ~buf | None -> ());
+      if r = reps - 1 && ch = blocks_n - 1 then (match release with Some p -> release_to_pair st p ~stage:0 ~buf | None -> ());
       (* The copy engine reads the staging copy, so the writes into it must
          have landed, not merely issued: a read scoreboard only says the store
          has taken its data out of the registers. The fence publishes them to
@@ -516,11 +549,12 @@ let store_body st (p : store_plan) ~release ~buf =
       Sass.fence_view_async b;
       Sass.warpsync b;
       Sass.uiadd3 b ur_st ur_esrc (slot * copy);
-      Sass.uiadd3 b (ur_st + 1) ur_x (x0 + imm_x.(ch));
-      Sass.uiadd3 b (ur_st + 2) ur_y (y0 + imm_y.(ch));
+      Sass.uiadd3 b (ur_st + 1) ur_x (x0 + imm_x.(ch) + p.rep_x.(r));
+      Sass.uiadd3 b (ur_st + 2) ur_y (y0 + imm_y.(ch) + p.rep_y.(r));
       Sass.utmastg b ~g:ur_st ~map:(ur_param (param_index st dst));
       Sass.utmacmdflush b
     done
+  done
 
 (* The first row of an operand CTA rank v loads, relative to the tile origin
    its load starts from: the atom's share of the operand, less the share of
@@ -606,9 +640,14 @@ let rec lower_stmt st ~stage ~buf ~(tx_done : (string, unit) Hashtbl.t) ~(tma_in
     end;
     (* the next stage's box starts where this one's K extent ends *)
     Sass.uiadd3 b (g + 2) (g + 2) (snd (Atom.dims (Hashtbl.find st.layouts dst)))
-  | Mma { atom; d = _; a; b = bb } ->
+  | Mma { atom; d; a; b = bb } ->
     let b = st.b in
     let da = operand_desc st a and db = operand_desc st bb in
+    let acc = ttile st d in
+    (* block r of a stacked MMA reads A from row r * (the atom's share) on and
+       writes the accumulator r * tcols columns on: both read off the layouts *)
+    let a_rows = snd (share_rows atom `A ~v:0) in
+    let a_rep r = (Atom.at2 (Hashtbl.find st.layouts a) (r * a_rows) 0 - Atom.at2 (Hashtbl.find st.layouts a) 0 0) / 16 in
     (* one MMA consumes the atom's K columns of the stage; the stage's K extent
        is its layout's *)
     let k_of name = snd (Atom.dims (Hashtbl.find st.layouts name)) in
@@ -625,18 +664,25 @@ let rec lower_stmt st ~stage ~buf ~(tx_done : (string, unit) Hashtbl.t) ~(tma_in
       desc_low st ~ur:base_b ~off:(Hashtbl.find st.smem_dyn bb + (stage * st.stage_bytes))
     end;
     for j = 0 to steps - 1 do
-      Sass.uiadd3 b ur_da base_a (da.kstep * j);
       Sass.uiadd3 b ur_db base_b (db.kstep * j);
-      if st.mma_seen = 0 then begin
-        Sass.uisetp_ne b 0 ur_mma_count;
-        (if two_cta st
-         then Sass.utchmma2_up b ~guard:up_leader ~a:ur_da ~bb:ur_db ~d:ur_acc ~e:ur_zero ~idesc:ur_idesc ~up:0
-         else Sass.utchmma_up b ~a:ur_da ~bb:ur_db ~d:ur_acc ~e:ur_zero ~idesc:ur_idesc ~up:0);
-        Sass.umov b ur_mma_count 1
-      end
-      else if two_cta st
-      then Sass.utchmma2 b ~guard:up_leader ~a:ur_da ~bb:ur_db ~d:ur_acc ~e:ur_zero ~idesc:ur_idesc ~acc:true
-      else Sass.utchmma_acc b ~a:ur_da ~bb:ur_db ~d:ur_acc ~e:ur_zero ~idesc:ur_idesc ~acc:true;
+      (* the tile's first k step overwrites every block; it reads a flag the
+         loop body sets, every other step accumulates *)
+      let first = st.mma_seen = 0 in
+      if first then Sass.uisetp_ne b 0 ur_mma_count;
+      for r' = 0 to acc.reps - 1 do
+        let r = if !mma_reverse then acc.reps - 1 - r' else r' in
+        Sass.uiadd3 b ur_da base_a ((da.kstep * j) + a_rep r);
+        let dst = if r = 0 then ur_acc else (Sass.uiadd3 b ur_acc_rep ur_acc (r * acc.tcols); ur_acc_rep) in
+        if first
+        then
+          if two_cta st
+          then Sass.utchmma2_up b ~guard:up_leader ~a:ur_da ~bb:ur_db ~d:dst ~e:ur_zero ~idesc:ur_idesc ~up:0
+          else Sass.utchmma_up b ~a:ur_da ~bb:ur_db ~d:dst ~e:ur_zero ~idesc:ur_idesc ~up:0
+        else if two_cta st
+        then Sass.utchmma2 b ~guard:up_leader ~a:ur_da ~bb:ur_db ~d:dst ~e:ur_zero ~idesc:ur_idesc ~acc:true
+        else Sass.utchmma_acc b ~a:ur_da ~bb:ur_db ~d:dst ~e:ur_zero ~idesc:ur_idesc ~acc:true
+      done;
+      if first then Sass.umov b ur_mma_count 1;
       st.mma_seen <- st.mma_seen + 1
     done
   | Commit p ->
@@ -795,10 +841,18 @@ let buffer_base st ~buf ~into =
 
 let dealloc st =
   let acc = List.hd st.k.tmem in
-  for buf = 0 to acc.bufs - 1 do
-    buffer_base st ~buf ~into:ur_acc;
-    free_tmem st.b ~base:ur_acc ~ncols:(Atom.tmem_columns acc.tcols)
-  done
+  let ncols = Atom.tmem_columns (acc.reps * acc.tcols) in
+  (* An allocation of all 512 columns is freed by clearing the allocator's
+     whole map, as nvjet does: clearing its columns alone leaves the next
+     launch on the SM waiting forever (measured, warpc talloc 512 [clear]).
+     Only a CTA alone on its multiprocessor holds all 512. *)
+  if ncols * acc.bufs = 512 && acc.bufs = 1
+  then Sass.utcatomsws_clear st.b
+  else
+    for buf = 0 to acc.bufs - 1 do
+      buffer_base st ~buf ~into:ur_acc;
+      free_tmem st.b ~base:ur_acc ~ncols
+    done
 
 (* ---- cluster launch control ---- *)
 
@@ -959,7 +1013,7 @@ let schedule st ~role_end =
 (* A probe of the allocator alone: warp 0 allocates [ncols] columns, gives up
    its permit, frees them and exits -- the GEMM's instructions and nothing
    else, so a launch that follows shows whether the free left anything. *)
-let tmem_probe ~ncols ~times =
+let tmem_probe ?(clear = false) ~ncols ~times () =
   let b = Sass.create () in
   Sass.ldc b 1 0x37c;
   Sass.s2r_tid b r_tid;
@@ -973,9 +1027,11 @@ let tmem_probe ~ncols ~times =
     Sass.uiadd3 b keep.(i) ur_init 0
   done;
   Sass.uvirtcount_dealloc b;
-  for i = 0 to times - 1 do
-    free_tmem b ~base:keep.(i) ~ncols
-  done;
+  if clear then Sass.utcatomsws_clear b
+  else
+    for i = 0 to times - 1 do
+      free_tmem b ~base:keep.(i) ~ncols
+    done;
   Sass.label b "DONE";
   Sass.exit b;
   [ Printf.sprintf ".kernel talloc_%dx%d" times ncols; ".sm sm_100a"; ".regs 16"; ".barriers 1"; ".threads 128"
@@ -1130,8 +1186,9 @@ let lower (k : kernel) : string list =
   (* a B200 multiprocessor gives a CTA 227 KB of shared memory *)
   if dyn_bytes + static_bytes + 0x400 > 232448
   then failwith (Printf.sprintf "shared memory: %d bytes, the multiprocessor has 232448" (dyn_bytes + static_bytes + 0x400));
-  (* each buffer is its own allocation, of the power of two that holds it *)
-  let acc_cols = Atom.tmem_columns (List.hd k.tmem).tcols in
+  (* each buffer is its own allocation, of the power of two that holds its
+     blocks *)
+  let acc_cols = let t = List.hd k.tmem in Atom.tmem_columns (t.reps * t.tcols) in
   if acc_cols * nbuf > 512 then failwith "tmem columns";
   let st =
     { b; k; pipe_slot; pipe_index; smem_dyn; stage_bytes; slot_off; labels = 0; max_reg = r_data.(1) + 63; mma_seen = 0

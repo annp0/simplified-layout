@@ -249,6 +249,9 @@ let nanosleep_syncs b ~neg p =
 let uvirtcount_dealloc b = push b (I (mk ~lat:alu "UVIRTCOUNT.DEALLOC.SMPOOL 0x80"))
 let utcatomsws_and b u = push b (I (mk ~late:[ UR u ] ~lat:Variable (pf "UTCATOMSWS.AND URZ, UR%d" u)))
 
+(* clear the whole allocation bitmap, as nvjet frees its 512 columns *)
+let utcatomsws_clear b = push b (I (mk ~lat:Variable "UTCATOMSWS.AND URZ, URZ"))
+
 let utchmma b ~a ~bb ~d ~e ~idesc ~acc =
   push b (I (mk ~defs:[ Tok 1 ] ~uses:[ Tok 1 ] ~late:[ UR a; UR (a + 1); UR bb; UR (bb + 1); UR d; UR e; UR idesc ] ~lat:(Fixed 12) ~min_stall:12
                (pf "UTCHMMA gdesc[UR%d], gdesc[UR%d], tmem[UR%d], tmem[UR%d], idesc[UR%d], %s" a bb d e idesc (if acc then "UPT" else "!UPT"))))

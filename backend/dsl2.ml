@@ -43,8 +43,11 @@ type stile =
 
 type ttile =
   { tname : string
-  ; trows : int
+  ; trows : int (* the lanes of one atom's block of the result *)
   ; tcols : int
+  ; reps : int
+      (* blocks of the result stacked along the MMA's rows, one atom each:
+         block r's lanes are the same, its columns r * tcols further on *)
   ; bufs : int (* accumulators in flight: the epilogue of one tile runs while
                   the mainloop of the next fills the other *)
   }
@@ -218,13 +221,19 @@ let gemm ?(tile_m = 128) ?(tile_n = 128) ?(tile_k = 64) ?bufs ?(cluster = 1) ?(c
      along the output's columns, and a CTA's tile_m x tile_n output is the
      atom's N x (M / CTAs). *)
   let ctas = if pair then 2 else 1 in
-  let atom =
-    let m, n = if swap then tile_n * ctas, tile_m else tile_m * ctas, tile_n in
-    Atom.umma ~ab:F16 ~acc:F32 ~m ~n ~ctas ~a_major:K_major ~b_major:K_major ~a_src:Smem_desc
-  in
+  (* The MMA covers its rows with as many atoms as it takes: an atom spans at
+     most 128 rows a CTA (256 over a pair), and a taller tile stacks blocks of
+     them along the rows, as nvjet's 256 x 256 tile does. *)
+  let rows_needed, atom_n = if swap then tile_n * ctas, tile_m else tile_m * ctas, tile_n in
+  let atom_m = min rows_needed (128 * ctas) in
+  if rows_needed mod atom_m <> 0 then failwith "gemm: the MMA's rows are not whole atoms";
+  let reps = rows_needed / atom_m in
+  let atom = Atom.umma ~ab:F16 ~acc:F32 ~m:atom_m ~n:atom_n ~ctas ~a_major:K_major ~b_major:K_major ~a_src:Smem_desc in
   let a_tile, b_tile = if swap then "sb", "sa" else "sa", "sb" in
   (* each CTA stages the rows of A and of B the atom gives it *)
   let rows_of l = snd (Atom.cta_rows l ~cols:(Atom.umma_k atom) ~v:0) in
+  (* the A operand holds each block's rows, one after the other *)
+  let rows_of_a () = reps * rows_of (Atom.umma_a atom) in
   { name = Printf.sprintf "pgemm_%d_%d_%d_s%d_t%d" m n k depth tile_n
   ; params =
       [ { name = "c"; dtype = F32; rows = m; cols = n; via = Tmap }
@@ -238,8 +247,8 @@ let gemm ?(tile_m = 128) ?(tile_n = 128) ?(tile_k = 64) ?bufs ?(cluster = 1) ?(c
        wrong, and half of it per CTA is what makes their 230 KB of shared
        memory hold eight stages. *)
   ; smem =
-      [ { sname = "sa"; sdtype = F16; srows = rows_of (if swap then Atom.umma_b atom else Atom.umma_a atom); scols = tile_k; ring = Stages }
-      ; { sname = "sb"; sdtype = F16; srows = rows_of (if swap then Atom.umma_a atom else Atom.umma_b atom); scols = tile_k; ring = Stages }
+      [ { sname = "sa"; sdtype = F16; srows = (if swap then rows_of (Atom.umma_b atom) else rows_of_a ()); scols = tile_k; ring = Stages }
+      ; { sname = "sb"; sdtype = F16; srows = (if swap then rows_of_a () else rows_of (Atom.umma_b atom)); scols = tile_k; ring = Stages }
         (* one block of the output per warp, two deep so a block is written
            while the copy engine still reads the previous one: 32 rows by 32
            columns, or, with the accumulator transposed, 8 rows by the 32
@@ -251,6 +260,7 @@ let gemm ?(tile_m = 128) ?(tile_n = 128) ?(tile_k = 64) ?bufs ?(cluster = 1) ?(c
       [ { tname = "acc"
         ; trows = snd (Atom.cta_rows (Atom.umma_c atom) ~cols:atom.n ~v:0)
         ; tcols = atom.n
+        ; reps
         ; (* Two accumulators let the epilogue of one tile run while the
              mainloop of the next fills the other; two 256-wide ones fill
              tensor memory exactly. A CTA with one tile has no next tile, and
@@ -259,7 +269,7 @@ let gemm ?(tile_m = 128) ?(tile_n = 128) ?(tile_k = 64) ?bufs ?(cluster = 1) ?(c
           bufs =
             (match bufs with
              | Some b -> b
-             | None -> if 2 * Atom.tmem_columns atom.n <= 512 && (m + tile_m - 1) / tile_m * ((n + tile_n - 1) / tile_n) > sms then 2 else 1)
+             | None -> if 2 * Atom.tmem_columns (reps * atom.n) <= 512 && (m + tile_m - 1) / tile_m * ((n + tile_n - 1) / tile_n) > sms then 2 else 1)
         } ]
   ; pipes =
       [ { pname = "full"; per_stage = true; per_buffer = false; cross = false; arrivals = 1; free_at_start = false }
@@ -374,6 +384,6 @@ let to_string k =
            Printf.sprintf "  smem %s : %s[%d,%d] x %s" s.sname (dtype_string s.sdtype) s.srows s.scols
              (match s.ring with Stages -> "depth" | Per_warp n -> Printf.sprintf "%d per warp" n))
          k.smem
-     @ List.map (fun (t : ttile) -> Printf.sprintf "  tmem %s : f32[%d,%d] x %d buffers" t.tname t.trows t.tcols t.bufs) k.tmem
+     @ List.map (fun (t : ttile) -> Printf.sprintf "  tmem %s : f32[%d,%d] x %d blocks x %d buffers" t.tname t.trows t.tcols t.reps t.bufs) k.tmem
      @ List.map (fun (p : pipe) -> Printf.sprintf "  pipe %s%s, %d arrival%s%s" p.pname (if p.per_stage then "[stage]" else if p.per_buffer then "[buffer]" else "") p.arrivals (if p.arrivals > 1 then "s" else "") (if p.free_at_start then ", free at start" else "")) k.pipes
      @ List.map (stmt_string "  ") k.body)

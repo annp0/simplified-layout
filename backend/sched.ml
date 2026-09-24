@@ -12,8 +12,21 @@ open Sass
 let br_stall = 13 (* what a taken branch is assumed to cost *)
 let pipe_gap = function "hmma" -> 4 | _ -> 1
 
+(* The asynchronous units read their uniform-register operands later than the
+   ALU does: ptxas never has one of them follow the uniform-ALU instruction
+   that wrote its operand by fewer than 9 cycles, nor UTCHMMA by fewer than
+   19 (CUTLASS 70's SASS). An MMA issued 6 cycles after its descriptor was
+   written read the old one -- measured: the first MMA of a stage lost. *)
+let async_read_delay text =
+  let op = match String.split_on_char ' ' (String.trim text) with o :: _ -> o | [] -> "" in
+  let starts p = String.length op >= String.length p && String.sub op 0 (String.length p) = p in
+  if starts "UTCHMMA" then 19
+  else if List.exists starts [ "SYNCS"; "UTMALDG"; "UTMASTG"; "UTCBAR"; "UGETNEXTWORKID"; "UTMACCTL"; "UTCATOMSWS" ] then 9
+  else 0
+
 type snap =
   { s_ready : (reg * int) list
+  ; s_issued : (reg * int) list
   ; s_hold : (reg * int) list
   ; s_pw : (reg * int) list
   ; s_pr : (reg * int) list
@@ -34,6 +47,8 @@ let schedule (items : item list) : string list =
   let issue = Array.make n 0 and waitm = Array.make n 0 and wbar = Array.make n 7 and rbar = Array.make n 7 in
   let pass () =
     let ready = Hashtbl.create 64 and hold = Hashtbl.create 64 in
+    (* when a uniform register's fixed-latency value was issued *)
+    let issued = Hashtbl.create 64 in
     let pw = Hashtbl.create 64 and pr = Hashtbl.create 64 in
     let clock = ref (-1) in
     let prev_var = ref false and wcount = ref 0 and rcount = ref 0 and cur_wb = ref 0 and cur_rb = ref 3 in
@@ -53,6 +68,10 @@ let schedule (items : item list) : string list =
            | Some s ->
              let at = !clock + 1 in
              List.iter (fun (r, rem) -> Hashtbl.replace ready r (max (find0 ready r) (at + rem))) s.s_ready;
+             List.iter
+               (fun (r, rel) ->
+                 Hashtbl.replace issued r (max (Option.value (Hashtbl.find_opt issued r) ~default:(-1000)) (at + rel)))
+               s.s_issued;
              List.iter (fun (r, rem) -> Hashtbl.replace hold r (max (find0 hold r) (at + rem))) s.s_hold;
              List.iter (fun (r, m) -> Hashtbl.replace pw r (find0 pw r lor m)) s.s_pw;
              List.iter (fun (r, m) -> Hashtbl.replace pr r (find0 pr r lor m)) s.s_pr)
@@ -62,6 +81,12 @@ let schedule (items : item list) : string list =
           let need_ready r = match Hashtbl.find_opt ready r with Some c -> t := max !t c | None -> () in
           let need_wait tbl r = match Hashtbl.find_opt tbl r with Some m -> wait := !wait lor m | None -> () in
           List.iter (fun r -> need_wait pw r; need_ready r) (ins.uses @ ins.late_uses);
+          (let delay = async_read_delay ins.text in
+           if delay > 0
+           then
+             List.iter
+               (fun r -> match r, Hashtbl.find_opt issued r with UR _, Some at -> t := max !t (at + delay) | _ -> ())
+               (ins.uses @ ins.late_uses));
           List.iter
             (fun r ->
               need_wait pw r;
@@ -106,8 +131,11 @@ let schedule (items : item list) : string list =
           List.iter
             (fun r ->
               Hashtbl.remove ready r; Hashtbl.remove hold r; Hashtbl.remove pw r;
+              Hashtbl.remove issued r;
               match ins.lat with
-              | Fixed l -> Hashtbl.replace ready r (!t + l)
+              | Fixed l ->
+                Hashtbl.replace ready r (!t + l);
+                (match r with UR _ -> Hashtbl.replace issued r !t | _ -> ())
               | Variable -> Hashtbl.replace pw r (1 lsl wb))
             ins.defs;
           if rb <> 7 then List.iter (fun r -> Hashtbl.replace pr r (find0 pr r lor (1 lsl rb))) ins.late_uses;
@@ -122,7 +150,8 @@ let schedule (items : item list) : string list =
              let depart = !t + br_stall in
              let rel tbl = Hashtbl.fold (fun r c acc -> if c > depart then (r, c - depart) :: acc else acc) tbl [] in
              let all tbl = Hashtbl.fold (fun r m acc -> (r, m) :: acc) tbl [] in
-             Hashtbl.replace carry l { s_ready = rel ready; s_hold = rel hold; s_pw = all pw; s_pr = all pr }
+             let rel_issued = Hashtbl.fold (fun r c acc -> if c + 19 > depart then (r, c - depart) :: acc else acc) issued [] in
+             Hashtbl.replace carry l { s_ready = rel ready; s_issued = rel_issued; s_hold = rel hold; s_pw = all pw; s_pr = all pr }
            | _ -> ()))
       arr;
     !changed
