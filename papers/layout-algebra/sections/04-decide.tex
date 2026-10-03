@@ -1,0 +1,213 @@
+\section{Deciding whether a composite is a layout}\label{sec:decide}
+
+While a composite can be natively emitted as is, sometimes we can simplify the codegen
+if that composite is actually itself a layout.
+
+Fix a map $f : \mathrm{Coord}(S) \to \Z$ on a shape $S = (n_1,\dots,n_m)$.
+We take $S$ flat, since a nested shape has the coordinates of the flat shape
+of its leaves, regrouped. Write $c = (c_1,\dots,c_m)$ for a coordinate and
+$\mathbf{0}$ for the origin. Every layout sends $\mathbf{0}$ to $0$, and
+composition and swizzle preserve this, so $f(\mathbf{0}) = 0$ for every
+composite. Maps take values in $\Z$ throughout this section: strides are
+integers, and Section~\ref{sec:restrict} subtracts a constant.
+
+\begin{definition}[Refinement]\label{def:refine}
+A \emph{refinement} of a flat shape $S = (n_1,\dots,n_m)$ is a shape
+$S' = (S_1,\dots,S_m)$ with each $S_i$ flat and $\size S_i = n_i$. A
+coordinate of $S_i$ is identified with its flattening in $[0,n_i)$
+(Definition~\ref{def:layout}), so $\mathrm{Coord}(S')$ and $\mathrm{Coord}(S)$
+are the same set. A map $f : \mathrm{Coord}(S) \to \Z$ \emph{is the layout}
+$S'{:}D'$ when
+\[
+f(c_1,\dots,c_m) \;=\;
+(S'{:}D')\big(\mathrm{unflatten}_{S_1}(c_1),\,\dots,\,\mathrm{unflatten}_{S_m}(c_m)\big)
+\]
+for every coordinate; for $S' = S$ this says $f = S{:}D$. The question of
+this section is whether $f$ is a layout $S'{:}D'$ for some refinement $S'$ of
+$S$ and some stride $D'$.
+\end{definition}
+
+\begin{lemma}[Separability]\label{lem:separable}
+Let $S = (n_1,\dots,n_m)$ be a flat shape and $f : \mathrm{Coord}(S) \to \Z$.
+For $1 \le i \le m$ let $e_i$ be the coordinate with entry $i$ equal to $1$
+and every other entry $0$, and define $g_i : [0,n_i) \to \Z$ by
+$g_i(v) = f(v\,e_i)$. Then $f$ is a layout $S'{:}D'$ for some refinement $S'$
+of $S$ if and only if
+\begin{equation}\label{eq:sep}
+f(c) = \sum_{i=1}^{m} g_i(c_i)
+\quad\text{for every } c = (c_1,\dots,c_m) \in \mathrm{Coord}(S),
+\end{equation}
+and each $g_i$ is a layout of some flat shape of size $n_i$.
+\end{lemma}
+\begin{proof}
+($\Rightarrow$) Let $f = S'{:}(D_1,\dots,D_m)$ with $S' = (S_1,\dots,S_m)$.
+By Definition~\ref{def:layout},
+\[
+f(c) = \sum_{i=1}^{m} (S_i{:}D_i)\big(\mathrm{unflatten}_{S_i}(c_i)\big)
+\quad\text{for every } c.
+\]
+At $c = v\,e_i$ every term but the $i$th is a layout evaluated at coordinate
+$0$, hence $0$, so $g_i(v) = (S_i{:}D_i)(\mathrm{unflatten}_{S_i}(v))$: the
+$i$th term is $g_i(c_i)$, which is \eqref{eq:sep}, and $g_i = S_i{:}D_i$.
+($\Leftarrow$) If $g_i = S_i{:}D_i$ for each $i$, the same identity read
+backwards gives $f = (S_1,\dots,S_m){:}(D_1,\dots,D_m)$.
+\end{proof}
+
+Checking \eqref{eq:sep} is one pass over $\mathrm{Coord}(S)$. What remains
+is one coordinate at a time: a map $g : [0,n) \to \Z$ with $g(0) = 0$, and
+the question whether there are a flat shape $T$ of size $n$ and a stride $D$
+with $g = (T{:}D) \circ \mathrm{unflatten}_T$. To decide it we need this
+composite as a formula in $v$.
+
+Number the entries of $T$ from the right, $T = (m_k,\dots,m_1)$, so that
+indices increase with the strides below. By Definition~\ref{def:layout},
+$\mathrm{unflatten}_T(v)$ is the coordinate $(x_k,\dots,x_1)$ of $T$ with
+\[
+v = \sum_{j=1}^{k} x_j\, w_j, \qquad w_j = m_1 m_2 \cdots m_{j-1},
+\]
+the $w_j$ being the strides of $\mathrm{canonical}(T)$; so $w_1 = 1$,
+$w_{j+1} = w_j m_j$, and $w_k m_k = n$. Solving for the components,
+\[
+x_j = \lfloor v / w_j \rfloor \bmod m_j,
+\]
+which we write $d_j(v)$. Therefore
+\[
+\big(T{:}(s_k,\dots,s_1)\big)\big(\mathrm{unflatten}_T(v)\big)
+\;=\; \sum_{j=1}^{k} s_j\, d_j(v),
+\]
+and $g$ is the layout $T{:}(s_k,\dots,s_1)$ exactly when $g(v)$ equals this
+sum for every $v \in [0,n)$.
+
+Two remarks turn the search for $T$ into a search for the $w_j$. An entry
+with $m_j = 1$ has $d_j = 0$ and contributes nothing, so we assume $T$ has
+none; then $1 = w_1 < w_2 < \cdots < w_k < n$, each dividing the next and
+$w_k$ dividing $n$, which we write $1 = w_1 \mid w_2 \mid \cdots \mid w_k
+\mid n$ and call the \emph{chain} of $T$. Conversely, every such chain is
+the chain of exactly one such $T$, given by $m_j = w_{j+1}/w_j$ with
+$w_{k+1} = n$. Theorem~\ref{thm:decide} finds $T$ by finding its chain.
+
+Each component $d_j(v) = \lfloor v/w_j \rfloor \bmod m_j$ is the remainder
+of $\lfloor v/w_j \rfloor$ on division by $m_j$. The lemma rewrites
+$\sum_j s_j\, d_j(v)$ with floors alone.
+
+\begin{lemma}[Components as differences of floors]\label{lem:floor}
+For positive integers $w \mid w'$ and every integer $v \ge 0$,
+\[
+\lfloor v/w \rfloor \bmod (w'/w) \;=\;
+\lfloor v/w \rfloor - (w'/w)\lfloor v/w' \rfloor .
+\]
+Let $T$ be a flat shape of size $n$ with $k$ entries, with chain
+$1 = w_1 \mid \cdots \mid w_k \mid n$, entry sizes $m_j$, and components
+$d_j$ as above, and let integers $s_1,\dots,s_k$ and $a_1,\dots,a_k$ be
+related by
+\[
+a_j = s_j - m_{j-1}\,s_{j-1} \quad (1 \le j \le k), \qquad m_0 s_0 = 0,
+\]
+a relation that determines either family from the other. Then for a map
+$g : [0,n) \to \Z$,
+\[
+g(v) = \sum_{j=1}^{k} s_j\, d_j(v) \ \text{ for every } v \in [0,n)
+\quad\Longleftrightarrow\quad
+g(v) = \sum_{j=1}^{k} a_j \lfloor v/w_j \rfloor \ \text{ for every } v \in [0,n),
+\]
+and when these hold, $s_j = g(w_j)$.
+\end{lemma}
+\begin{proof}
+Write $q = \lfloor v/w \rfloor$ and $r = w'/w$. The remainder of $q$ on
+division by $r$ is $q - r\lfloor q/r \rfloor$, and $\lfloor q/r \rfloor =
+\lfloor v/(wr) \rfloor = \lfloor v/w' \rfloor$ for positive integers $w, r$,
+which is the identity. With $w = w_j$, $w' = w_{j+1}$, and $w'/w = m_j$ it
+reads
+\[
+d_j(v) = \lfloor v/w_j \rfloor - m_j \lfloor v/w_{j+1} \rfloor,
+\]
+where for $j = k$, $\lfloor v/w_{k+1} \rfloor = \lfloor v/n \rfloor = 0$ on
+$[0,n)$. Hence
+\[
+\sum_{j=1}^{k} s_j\, d_j(v)
+= \sum_{j=1}^{k} s_j \lfloor v/w_j \rfloor
+  - \sum_{j=1}^{k-1} s_j m_j \lfloor v/w_{j+1} \rfloor
+= \sum_{j=1}^{k} \big(s_j - m_{j-1}s_{j-1}\big) \lfloor v/w_j \rfloor
+= \sum_{j=1}^{k} a_j \lfloor v/w_j \rfloor ,
+\]
+which is the equivalence. The relation gives $s_j = a_j + m_{j-1}s_{j-1}$,
+so either family determines the other. Finally,
+$d_l(w_j) = \lfloor w_j/w_l \rfloor \bmod m_l$ is $0$ for $l > j$ because
+$w_j < w_l$, is $1$ for $l = j$ because $m_j \ge 2$, and is $0$ for $l < j$
+because $w_j/w_l$ is a multiple of $w_{l+1}/w_l = m_l$; so
+$g(w_j) = \sum_l s_l\, d_l(w_j) = s_j$.
+\end{proof}
+
+With floors alone, first differences read the chain off $g$, because
+$\lfloor t/w \rfloor - \lfloor (t-1)/w \rfloor$ is $1$ if $w \mid t$ and $0$
+otherwise.
+
+\begin{theorem}[Linear recognition]\label{thm:decide}
+Let $n \ge 2$ (for $n = 1$, $g = 0$ is the layout $(1){:}0$), let
+$g : [0,n) \to \Z$ with $g(0) = 0$, and let $h(t) = g(t) - g(t-1)$ for
+$1 \le t < n$. Run the following scan. Keep a copy $\rho$ of $h$, an integer
+$w_{\mathrm{last}}$ initially $1$, and a set $R$ initially empty. For
+$t = 1, 2, \dots, n-1$ in order, if $\rho(t) \ne 0$: if $t \nmid n$ or
+$w_{\mathrm{last}} \nmid t$, reject; otherwise put $t$ in $R$, set
+$a_t = \rho(t)$ and $w_{\mathrm{last}} = t$, and replace $\rho(t')$ by
+$\rho(t') - a_t$ for every multiple $t'$ of $t$ in $[t, n)$. If no $t$
+rejects, accept.
+
+Then $g$ is a layout of some flat shape of size $n$ if and only if the scan
+accepts. If it accepts, $\{1\} \cup R$ is the chain of a flat shape $T$ of
+size $n$; $g$ is the layout $T{:}(s_k,\dots,s_1)$ with $s_j = g(w_j)$; and
+every flat shape of size $n$ without entries of size $1$ of which $g$ is a
+layout has a chain containing $\{1\} \cup R$. We call this $T$ the
+\emph{coarsest}. The scan takes $O(n)$ arithmetic operations.
+\end{theorem}
+\begin{proof}
+By Lemma~\ref{lem:floor}, $g$ is a layout of the shape with chain $W$ if
+and only if there are integers $a_w$, $w \in W$, with
+$g(v) = \sum_{w \in W} a_w \lfloor v/w \rfloor$ for every $v \in [0,n)$.
+Since $\lfloor t/w \rfloor - \lfloor (t-1)/w \rfloor = [\,w \mid t\,]$ and
+$g(0) = 0 = \sum_{w} a_w \lfloor 0/w \rfloor$, this is equivalent to
+\begin{equation}\label{eq:diff}
+h(t) = \sum_{w \in W} a_w\, [\,w \mid t\,] \quad\text{for } 1 \le t < n.
+\end{equation}
+
+Suppose \eqref{eq:diff} holds for some chain $W$ and coefficients $a_w$. We
+show by induction on $t$ that when the scan reaches $t$,
+$R = \{\, w \in W : w < t,\ a_w \ne 0 \,\}$ with the recorded $a_w$ equal
+to those of \eqref{eq:diff}, and $\rho(t) = a_t$ if $t \in W$ and
+$\rho(t) = 0$ otherwise. At $t = 1$, $R$ is empty and $\rho(1) = h(1) =
+a_1$ because $1 \in W$ is the only divisor of $1$. Given the claim at $t$:
+$\rho(t) = h(t) - \sum_{w \in R,\, w \mid t} a_w = \sum_{w \in W,\, w \mid t}
+a_w - \sum_{w \in W,\, w < t,\, w \mid t} a_w = [\,t \in W\,]\, a_t$. If
+$\rho(t) \ne 0$ then $t \in W$ and $a_t \ne 0$; $t \mid n$ because every
+element of $W$ divides $n$; and $w_{\mathrm{last}}$, which is the largest
+element of $R$ or else $1$, lies in $W$ below $t$ and so divides $t$
+because $W$ is a chain. The scan records $t$ with $a_t$, and the claim
+holds at $t+1$; if $\rho(t) = 0$ nothing is recorded and the claim holds at
+$t+1$ as well. So the scan accepts, and $R \subseteq W$; with $1 \in W$,
+$\{1\} \cup R \subseteq W$.
+
+Conversely suppose the scan accepts. At each $t$ either $\rho(t)$ was $0$
+or $a_t = \rho(t)$ was subtracted from it, and later steps change $\rho$
+only at or beyond their own $t$; so at the end $\rho \equiv 0$, that is,
+$h(t) = \sum_{w \in R,\, w \mid t} a_w$ for $1 \le t < n$. Every element of
+$R$ divides $n$, lies below $n$, and is a multiple of the element recorded
+before it or of $1$, so $\{1\} \cup R$ is a chain; let $T$ be its shape,
+and put $a_1 = 0$ if $1 \notin R$. Then \eqref{eq:diff} holds for
+$W = \{1\} \cup R$, so $g$ is a layout of $T$ by Lemma~\ref{lem:floor}, with
+strides $s_j = g(w_j)$.
+
+Each element of $R$ is at least twice the one before, so the subtractions
+touch fewer than $n + n/2 + n/4 + \cdots < 2n$ entries of $\rho$; the rest
+of the scan is one pass over $t$.
+\end{proof}
+
+The methodology is similar to Appendix~A.2.1 of Axe~\cite{axe}.
+
+Codegen therefore emits one of two expressions. If the map is a layout
+$S'{:}D'$ for a refinement $S' = (S_1,\dots,S_m)$, it emits
+$\sum_{i,j} s_{ij}\, d_{ij}(c_i)$, with $d_{ij}$ the components of
+$\mathrm{unflatten}_{S_i}(c_i)$, for the coarsest $S'$; no such expression has
+fewer terms. Otherwise it emits the composite as Definition~\ref{def:compose}
+writes it: the value of the right operand, unflattened into the left operand's
+domain shape, evaluated by the left operand. Section~\ref{sec:restrict}
+extends this to restricted maps, which do not vanish at the origin.

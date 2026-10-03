@@ -1,0 +1,110 @@
+\section{Introduction}\label{sec:intro}
+
+For GPU kernels, it is important to have a scheme for describing how to move
+tiles of tensors between global memory, shared memory and registers. The de
+facto vocabulary for such schemes is the CuTe layout algebra underlying
+NVIDIA's CUTLASS library~\cite{cutedocs,cecka}. The most fundamental concept
+is the layout, which we shall reuse heavily.
+
+\begin{definition}[Layout]\label{def:layout}
+A \emph{shape} is a positive integer $n$, or a tuple $(S_1,\dots,S_k)$ of
+shapes; its \emph{size} is $\size n = n$ and
+$\size (S_1,\dots,S_k) = \prod_i \size S_i$. A \emph{coordinate} of $S$ is
+an integer $i \in [0,n)$, respectively a tuple $(c_1,\dots,c_k)$ of
+coordinates of the $S_i$; write $\mathrm{Coord}(S)$ for the set of them. A
+\emph{layout} $S{:}D$ is a shape $S$ together with a \emph{stride} $D$ of the
+same structure: an integer where $S$ is a positive integer, and a tuple
+$(D_1,\dots,D_k)$ where $S$ is $(S_1,\dots,S_k)$. Its index function
+$\mathrm{Coord}(S) \to \N$ is defined by recursion on the shape,
+\[
+(n{:}d)(i) = i\,d,
+\qquad
+\big((S_1,\dots,S_k){:}(D_1,\dots,D_k)\big)(c_1,\dots,c_k)
+= \sum_{j=1}^{k} (S_j{:}D_j)(c_j).
+\] Flattening is a bijection $\canon{\cdot}{S} : \mathrm{Coord}(S) \to
+[0,\size S)$, taken row-major, so that the last component varies fastest, with
+inverse $\mathrm{unflatten}_S$.
+\claude{Give the formula here, e.g.\ for $S=(n_1,\dots,n_k)$, $c_k = i \bmod n_k$, $c_{k-1} = \lfloor i/n_k \rfloor \bmod n_{k-1}$, \dots. It is used in Definition~\ref{def:compose} but first written out in Section~\ref{sec:decide}.} A coordinate may therefore be given as a single
+integer, and we say that integer \emph{is} the coordinate. The \emph{cosize} of the layout is the least $N$ with its
+image inside $[0,N)$, which is one plus the largest value it takes. The layout
+is \emph{dense} when its image is an initial segment $[0,N)$ of the integers,
+and a \emph{dense bijection} when it is moreover injective, in which case
+$N = \size S$ and every value below $N$ is taken exactly once. A
+\emph{mode} is one entry of the shape together with the matching entry of the
+stride. Two layouts \emph{concatenate}: for $A = S{:}D$ and $B = S'{:}D'$, the
+layout $(A,B)$ is $(S,S'){:}(D,D')$, and it sends $(c,c')$ to $A(c) + B(c')$.
+\end{definition}
+
+Layouts are fundamentally the correct concept here, because physical memory is
+linearly addressed while the logical space is multidimensional and dense as we
+imagine it. They are a natural way to abstract and describe those mappings.
+
+The algebra has four operations. Three of them, composition, complement and
+logical division, are formalized by Shah~\cite{shah}; the fourth, logical
+product, we take from the CUTLASS implementation.
+\claude{Notation switches here without warning: Definition~\ref{def:layout} writes $S{:}D$ indexed from 1 and flattens row-major, while the complement formula and the left-divisibility conditions below use Shah's $N{:}d$, indexed from 0, in CuTe's first-fastest order. One sentence saying so, pointing to Section~\ref{sec:cute}, would fix it.}
+The \emph{complement} of a
+layout
+$B = (N_0,\dots,N_\alpha){:}(d_0,\dots,d_\alpha)$, sorted by stride, with
+respect to an integer $M$, is
+\[
+B^{*}_{M} \;=\;
+\Big(d_0,\ \tfrac{d_1}{N_0 d_0},\ \dots,\ \tfrac{M}{N_\alpha d_\alpha}\Big)
+\;{:}\;
+\Big(1,\ N_0 d_0,\ \dots,\ N_\alpha d_\alpha\Big),
+\]
+chosen so that the concatenation $(B, B^{*}_{M})$ has size $M$ and its layout
+function is a bijection of $[0,M)$ onto itself. \emph{Logical division} is
+$A \mathbin{/} B = A \circ (B, B^{*}_{\size A})$, which reindexes $A$ so that
+one mode runs inside the tile $B$ selects and the other runs across copies of
+it. \emph{Logical product} is $A \otimes B = (A, A^{*}_{M} \circ B)$, where
+$M = \size A \cdot \cosize B$, the smallest $M$ for which the composition is
+defined. Its
+first mode is one copy of $A$, and its second walks $B$ through the addresses
+$A$ does not occupy, so the result is $\size B$ copies of $A$ placed in the
+pattern $B$ names.
+
+These operations are critical for constructing the layouts one usually wants.
+There is, however, a lot of complexity underneath them. Layouts are in general
+non-injective and non-surjective onto $[0,M)$, and CuTe always wants to write
+the composite as a layout again. This causes at least six condition checks. Two are in the complement, whose
+shape entries are quotients and so must divide: $N_{i-1}d_{i-1} \mid d_i$ for
+every $i$, and $N_\alpha d_\alpha \mid M$. The other four belong to
+composition. Write the flattened shape of $A$ as $M_0 \cdots M_\alpha$. It is \emph{left divisible} by $r$
+when $r = M_0 \cdots M_{i-1} \cdot c$ for some $i$, where $c$ is smaller than
+$M_i$ and divides it, and \emph{weakly left divisible} when the same holds
+except that $c$ need not divide $M_i$. For each mode $(N){:}(r)$ of $B$ this is
+three checks, since the prefix must divide $r$, the leftover $c$ must divide
+$M_i$, and what remains after $r$ must be weakly left divisible by $N$. One
+more is required across modes, that the intervals on which they act be pairwise
+disjoint~\cite{shah}. None of these conditions is visible in the CuTe API,
+yet all of them are visible failures.
+\claude{This paragraph lists the six conditions but never says why they are a problem. Open with the framing: CuTe's operations are partial; each is defined only under arithmetic side conditions that the API does not show, that CUTLASS mostly does not check, and that produce wrong layouts silently when they fail. Also, ``visible failures'' is unsupported and, for the complement, false: its failures are silent (the 2026-09-19 draft measures this against CUTLASS 4.8; see the archive).}
+
+We try to resolve those complexities by restricting what a layout can be.
+
+\paragraph{Explicit index spaces.} The input and the output of a layout each
+represent one of three things: a logical index into a tile, a thread-value
+index, or a physical offset in memory. Therefore a layout should declare which of the three its
+input and its output are, and we allow only the maps worth having between them.
+Logical and thread-value indices map into one another in either direction.
+Logical indices map into physical offsets. Nothing maps out of a physical
+offset. By design, a thread reaches memory by composing its map into logical
+space with the storage map.
+
+\paragraph{Requirements that follow from the space.} We allow those maps and
+not others because the three spaces do not carry the same obligations. Logical
+and thread-value indices have to account for their contents losslessly, so a
+map into either must be a dense bijection. Composition can only happen when one
+layout's image and the other's domain agree completely, which is natural
+because a physical offset is forbidden as a domain. A physical offset carries
+far fewer requirements, since gaps in memory are common and sharing one address
+between threads, to read the same element, is often what is wanted, so a map
+into physical need only be alias-free, meaning that distinct coordinates reach
+distinct addresses except where the layout marks a broadcast.
+
+\paragraph{Composition and simplification.} The composite of two layouts is not
+a layout in general. But we can decide if it can be written as a layout, and
+when it is a layout we emit one weighted sum of the coordinates. When it is
+not, we emit the composition literally, at the cost of a longer expression and
+more work at run time.

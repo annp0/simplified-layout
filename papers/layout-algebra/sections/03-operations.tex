@@ -1,0 +1,113 @@
+\section{Operations}\label{sec:ops}
+
+We define the following operations. Each takes a layout $L$, and where a second
+argument is needed it is written out; $S$ ranges over shapes and $A$ over
+layouts.
+
+\begin{description}
+\item[$\mathrm{canonical}(S)$] for a flat shape $S = (n_1,\dots,n_k)$, the
+layout
+\[
+(n_1,\dots,n_k) \;{:}\; \Big(\textstyle\prod_{i>1} n_i,\;
+\prod_{i>2} n_i,\; \dots,\; n_k,\; 1\Big).
+\]
+For an entry that is itself a shape, we take the canonical layout
+of that shape, with every stride multiplied by the product of the sizes to its
+right.
+\par\smallskip
+\input{figures/ops-canonical}
+
+
+\item[$\mathrm{split}(n{:}d,\, S)$] for $\size S = n$, the shape $S$ carrying
+the strides of $\mathrm{canonical}(S)$ each multiplied by $d$, which for a flat
+$S = (m_1,\dots,m_r)$ is
+\[
+(m_1,\dots,m_r) \;{:}\;
+\Big(d\textstyle\prod_{i>1} m_i,\; d\prod_{i>2} m_i,\; \dots,\; d\,m_r,\; d\Big)
+\]
+and for a nested $S$ follows its nesting. The argument $n{:}\bot$ gives $S$
+with every stride $\bot$.
+\par\smallskip
+\input{figures/ops-split}
+
+
+\item[$\divideop(L, S)$] partitions $L$ into tiles of shape $S$. Let
+$L = (n_1,\dots,n_m){:}(d_1,\dots,d_m)$ and let $S = (k_1,\dots,k_m)$ with
+$k_i \mid n_i$. Each mode splits as
+\[
+\mathrm{split}\big(n_i{:}d_i,\; (n_i/k_i,\, k_i)\big)
+\;=\; (n_i/k_i,\, k_i) \;{:}\; (k_i d_i,\, d_i),
+\]
+and collecting the second component of every split into one group and the
+first into another gives
+\[
+\divideop(L,S) \;=\;
+\big((k_1,\dots,k_m),\ (n_1/k_1,\dots,n_m/k_m)\big)
+\;{:}\;
+\big((d_1,\dots,d_m),\ (k_1d_1,\dots,k_md_m)\big).
+\]
+The first group indexes a mode inside a tile and the second indexes which
+tile. It is easy to see that precomposing with the flattening that sends each pair
+$(b_i, t_i)$ back to $c_i = b_i k_i + t_i$ recovers $L$.
+\par\smallskip
+\input{figures/ops-divide}
+
+
+\item[$\repeatop(L, A)$] copies of $L$ arranged in the layout of $A$, which is
+required to be a valid $\logical \to \logical$ layout and so a dense bijection:
+\[
+\repeatop(L,A) \;=\; (S_A, S_L) \;{:}\; \big((\cosize L)\,D_A,\ D_L\big),
+\]
+where $L = S_L{:}D_L$, $A = S_A{:}D_A$, and $c\,D$ multiplies every stride of
+$D$ by $c$.
+If $L$ is a dense bijection then $\cosize L = \size L$, and the addresses
+$(\size L)\,A(a) + L(v)$ take every value in $[0, \size A \cdot \size L)$
+exactly once: the result is a dense bijection.
+
+When $L$ carries a swizzle $\sigma$, $\repeatop$ is defined only if $\cosize L$
+is a power of two and both fields of $\sigma$ lie below it. Then
+$\sigma\big((\cosize L)\,a + x\big) = (\cosize L)\,a + \sigma(x)$ and every
+copy is swizzled alike. Otherwise the copy index reaches the bits $\sigma$
+reads, and the operation rejects.
+
+\item[$\interleave(L, A)$] the same copies interleaved element by element
+rather than laid out one after another, with $A$ again a valid
+$\logical \to \logical$ layout:
+\[
+\interleave(L,A) \;=\; (S_A, S_L) \;{:}\; \big(D_A,\ (\size A)\,D_L\big).
+\]
+The coordinate $(a,v)$ lands at $A(a) + (\size A)\,L(v)$, so each element of
+$L$ becomes a run of $\size A$ consecutive addresses holding that element of
+every copy, where $\repeatop$ instead gives each copy a run of its own. If $L$
+is a dense bijection the result is again a dense bijection onto
+$[0, \size A \cdot \size L)$. On a swizzled $L$ it has no defined meaning
+and rejects.
+\par\smallskip
+\input{figures/ops-repeat-interleave}
+
+
+\item[$\broadcast(L, S)$] $\size S$ copies of $L$ at the same addresses:
+\[
+\broadcast(L,S) \;=\; (S, S_L) \;{:}\; (\bot,\ D_L),
+\]
+writing $\bot$ for a stride of $\bot$ at every entry of $S$. The coordinate
+$(a,v)$ lands at $L(v)$ whatever $a$ is. The second argument is a shape and not
+a layout because the copies share their addresses and so have no strides to
+carry. The result is valid but not write-valid.
+\par\smallskip
+\input{figures/ops-broadcast}
+
+
+\item[$\mathrm{inverse}(L)$] for $L$ a dense bijection with modes
+$(n_1,\dots,n_m){:}(d_1,\dots,d_m)$. Give mode $i$ the canonical weight
+$w_i = \prod_{j>i} n_j$ and list the modes in decreasing order of stride. Then
+\[
+\mathrm{inverse}(L) \;=\;
+(n_{(1)},\dots,n_{(m)}) \;{:}\; (w_{(1)},\dots,w_{(m)}),
+\]
+again a dense bijection. Read both as maps on $[0,N)$, each unflattening the
+integer it is given into its own shape, and they are mutually inverse.
+\par\smallskip
+\input{figures/ops-inverse}
+
+\end{description}

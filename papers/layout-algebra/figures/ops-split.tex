@@ -1,0 +1,38 @@
+\begin{center}
+\begin{minipage}[t]{0.5\linewidth}\centering
+$6{:}2$\\[4pt]
+\begin{tikzpicture}[x={(0cm,-0.6cm)},y={(0.6cm,0cm)},every node/.style={minimum size=0.6cm, outer sep=0pt, font=\small}]
+\node[fill={rgb,255:red,175;green,175;blue,255}] at (0,0) {0};
+\node[fill={rgb,255:red,175;green,175;blue,255}] at (0,1) {2};
+\node[fill={rgb,255:red,175;green,175;blue,255}] at (0,2) {4};
+\node[fill={rgb,255:red,175;green,255;blue,175}] at (0,3) {6};
+\node[fill={rgb,255:red,175;green,255;blue,175}] at (0,4) {8};
+\node[fill={rgb,255:red,175;green,255;blue,175}] at (0,5) {10};
+\draw[color=black,thick,step=0.6cm,shift={(-0.5,-0.5)}] (0,0) grid (1,6);
+\node[anchor=east,minimum size=0pt,font=\footnotesize] at (0,-0.6) {\texttt{0}};
+\node[minimum size=0pt,font=\footnotesize] at (-0.85,0) {\texttt{0}};
+\node[minimum size=0pt,font=\footnotesize] at (-0.85,1) {\texttt{1}};
+\node[minimum size=0pt,font=\footnotesize] at (-0.85,2) {\texttt{2}};
+\node[minimum size=0pt,font=\footnotesize] at (-0.85,3) {\texttt{3}};
+\node[minimum size=0pt,font=\footnotesize] at (-0.85,4) {\texttt{4}};
+\node[minimum size=0pt,font=\footnotesize] at (-0.85,5) {\texttt{5}};
+\end{tikzpicture}
+\end{minipage}\hfill
+\begin{minipage}[t]{0.45\linewidth}\centering
+$\mathrm{split}(6{:}2,\,(2,3)) = (2,3){:}(6,2)$\\[4pt]
+\begin{tikzpicture}[x={(0cm,-0.6cm)},y={(0.6cm,0cm)},every node/.style={minimum size=0.6cm, outer sep=0pt, font=\small}]
+\node[fill={rgb,255:red,175;green,175;blue,255}] at (0,0) {0};
+\node[fill={rgb,255:red,175;green,175;blue,255}] at (0,1) {2};
+\node[fill={rgb,255:red,175;green,175;blue,255}] at (0,2) {4};
+\node[fill={rgb,255:red,175;green,255;blue,175}] at (1,0) {6};
+\node[fill={rgb,255:red,175;green,255;blue,175}] at (1,1) {8};
+\node[fill={rgb,255:red,175;green,255;blue,175}] at (1,2) {10};
+\draw[color=black,thick,step=0.6cm,shift={(-0.5,-0.5)}] (0,0) grid (2,3);
+\node[anchor=east,minimum size=0pt,font=\footnotesize] at (0,-0.6) {\texttt{0}};
+\node[anchor=east,minimum size=0pt,font=\footnotesize] at (1,-0.6) {\texttt{1}};
+\node[minimum size=0pt,font=\footnotesize] at (-0.85,0) {\texttt{0}};
+\node[minimum size=0pt,font=\footnotesize] at (-0.85,1) {\texttt{1}};
+\node[minimum size=0pt,font=\footnotesize] at (-0.85,2) {\texttt{2}};
+\end{tikzpicture}
+\end{minipage}
+\end{center}

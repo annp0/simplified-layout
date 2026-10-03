@@ -1,0 +1,226 @@
+\section{CuTe in this algebra}\label{sec:cute}\label{sec:idioms}
+
+CuTe lists the modes of a layout with the first varying fastest; we reverse
+the list, recursively, and the two then agree as functions on the same
+integers. CuTe's $\mathrm{composition}(A,B)$ applies $B$ first and is
+$A \circ B$ in our algebra, with $B$ the right operand of
+Definition~\ref{def:compose}. We take the four operations in the order of
+Section~\ref{sec:intro}, state what each is in our algebra, and name the
+documented examples~\cite{cutedocs} on which
+the two are checked to agree.
+
+\paragraph{Composition.} In CuTe, $\mathrm{composition}(A,B)$ is the layout
+$L$ with $L(c) = A(B(c))$ for every $c \in \mathrm{Coord}(S_B)$. In our
+algebra, $A \circ B$ is the map $c \mapsto A(\mathrm{unflatten}_{S_A}(B(c)))$, defined whenever $B$
+is a dense bijection onto $[0,\size A)$, and Theorem~\ref{thm:decide} decides
+whether it is a layout. For such a $B$, when CuTe's composition exists the
+two are the same function, so Theorem~\ref{thm:decide} accepts and returns
+the coarsest shape that realizes it. Checked on the three documented examples,
+\begin{align*}
+\mathrm{composition}\big((6,2){:}(8,2),\,(4,3){:}(3,1)\big)
+  &= \big((2,2),3\big){:}\big((24,2),8\big),\\
+\mathrm{composition}\big(20{:}2,\,(5,4){:}(4,1)\big) &= (5,4){:}(8,2),\\
+\mathrm{composition}\big((10,2){:}(16,4),\,(5,4){:}(1,5)\big)
+  &= \big(5,(2,2)\big){:}\big(16,(80,4)\big),
+\end{align*}
+as functions at every coordinate; in all three $B$ is a dense bijection onto
+$[0,\size A)$.
+
+\paragraph{Complement.} In CuTe, $B^{*}_{M}$ is the layout of
+Section~\ref{sec:intro}, defined under two divisibility conditions. In our
+algebra there is no complement operator. For
+$B = (N_0,\dots,N_\alpha){:}(d_0,\dots,d_\alpha)$ the two conditions make
+every factor of
+$M = d_0 \cdot N_0 \cdot \tfrac{d_1}{N_0 d_0} \cdot N_1 \cdots
+\tfrac{M}{N_\alpha d_\alpha}$ an integer. Let $R$ be the shape of these
+factors in our order,
+$R = \big(\tfrac{M}{N_\alpha d_\alpha},\, N_\alpha,\,
+\tfrac{d_\alpha}{N_{\alpha-1}d_{\alpha-1}},\, \dots,\, N_0,\, d_0\big)$,
+and let $S$ be $R$ with every entry other than the $N_i$ replaced by $1$.
+Then
+\[
+\divideop\big(\mathrm{canonical}(R),\, S\big) \;=\; \big(B,\ B^{*}_{M}\big)
+\]
+after dropping entries of size $1$: the tile is $B$ and the rest is its
+complement. Whether a given pair $(B, B^{*})$ is a bijection onto $[0,M)$ is
+decided by Lemma~\ref{lem:dense}. Checked on the six documented complements:
+$\divideop(\mathrm{canonical}(24), (4))$ has tile $4{:}1$ and rest $6{:}4$,
+which are $(4{:}1)^{*}_{24}$ and $(6{:}4)^{*}_{24}$;
+$\divideop(\mathrm{canonical}((12,2)), (4,1))$ has tile $4{:}2$ and rest
+$(3,2){:}(8,1)$, which is $(4{:}2)^{*}_{24} = (2,3){:}(1,8)$; and all six
+pairs $(B, B^{*}_{24})$ are bijections onto $[0,24)$.
+
+\paragraph{Division.} In CuTe, $A / B = A \circ (B, B^{*}_{\size A})$. In our
+algebra, for a tile given as a shape $S$ with $k_i \mid n_i$, this is $\divideop(A,S)$ of
+Section~\ref{sec:ops}, and
+\[
+\divideop(A, S) \;=\; A \circ \divideop\big(\mathrm{canonical}(S_A),\, S\big),
+\]
+whose right operand is a regrouping of the identity on $[0,\size A)$ and so a
+dense bijection onto it. For a tile given as a layout $B$ it is the composite
+$A \circ (B, B^{*}_{\size A})$ itself: $(B, B^{*}_{\size A})$ is a bijection
+onto $[0,\size A)$, so Definition~\ref{def:compose} applies with no further
+condition. Checked, as functions, on the documented strided tiler,
+\[
+(4,2,3){:}(2,1,8) \mathbin{/} 4{:}2 =
+\big((2,2),(2,3)\big){:}\big((4,1),(2,8)\big).
+\]
+CuTe's
+\texttt{zipped\_divide} groups the result as $((\text{tile}),(\text{rest}))$,
+which is the grouping $\divideop$ produces; \texttt{logical\_divide} groups
+it per mode, a regrouping of the same layout.
+
+\paragraph{Product.} In CuTe, $A \otimes B = (A, A^{*}_{M} \circ B)$ with
+$M = \size A \cdot \cosize B$. In our algebra,
+\[
+\repeatop(A,B) = (S_B, S_A){:}\big((\cosize A)\,D_B,\ D_A\big).
+\]
+When $A$ is a dense bijection, $A^{*}_{M} = (\cosize B){:}(\size A)$, so
+\[
+A \otimes B = \big(A,\ S_B{:}(\size A)\,D_B\big) = \repeatop(A,B).
+\]
+When $\cosize A > \size A$ the two differ. Take $A = (2,2){:}(4,1)$ and
+$B = 6{:}1$. Printed as CuTe prints layouts, one cell per coordinate holding
+its address and coloured by the copy it belongs to, $A$ is
+\input{figures/cute-product-operand}
+and the two products are, with the element $(i,j)$ of $A$ as the row and the
+copy $k$ as the column,
+\input{figures/cute-product-comparison}
+In CuTe the copy offsets are $A^{*}_{24} = (2,3){:}(2,8)$, that is
+$0, 2, 8, 10, 16, 18$, and
+\[
+A \otimes B = \big((2,2),(2,3)\big){:}\big((4,1),(2,8)\big)
+\]
+is a bijection onto $[0,24)$. In our algebra the copy offsets are the multiples of
+$\cosize A = 6$, and $\repeatop(A,B) = (6,(2,2)){:}(6,(4,1))$ is injective and
+not dense. CuTe's placement is available in our algebra:
+$\divideop(\mathrm{canonical}(R), S)$ is the pair $(A, A^{*}_{M})$ of the
+complement paragraph, and composing it on the right with
+$\repeatop(B, \mathrm{canonical}(S_A))$, which sends $(a,b)$ to $(a, B(b))$,
+gives $A \otimes B$ for every dense bijection $B$; for $B = k{:}1$ that
+composition is the identity, and for this $A$
+\[
+A \otimes B = \divideop\big(\mathrm{canonical}((6,4)),\ (2,2)\big).
+\]
+All of this is checked. With the
+operands exchanged and $B$ a dense bijection, $B \otimes A = (B,\
+S_A{:}(\size B)\,D_A)$, which is $\interleave(A,B)$ up to the order of the
+two coordinate groups. CuTe's \texttt{blocked\_product} and
+\texttt{raked\_product} are both $A \otimes B$ with the two coordinate groups
+zipped per mode, block index first or copy index first: the same map on
+coordinates, regrouped. For $A = 4{:}1$ and $B = 2{:}1$, $A \otimes B =
+\repeatop(A,B) = (2,4){:}(4,1)$, \texttt{raked\_product} is $(4,2){:}(1,4)$,
+the same map with its two coordinates exchanged, and $B \otimes A =
+\interleave(A,B) = (2,4){:}(1,2)$.
+
+\paragraph{Conditions.} CuTe's six conditions exist because its composition
+and complement must return a layout, so the operands are checked in advance
+for the result to be expressible as one. In our algebra neither operation has
+to: a composite is a map, and whether it is a layout is decided afterwards,
+for code generation only; and a complement is never formed on its own, it is
+the rest of a $\divideop$. So none of the six is checked. What is checked
+instead is that the right operand of a composition is a dense bijection onto
+the left operand's coordinates, by the stride criterion of
+Lemma~\ref{lem:dense}; that a map into logical or thread-value space is a
+dense bijection and a map into physical space is alias-free; and the
+precondition of each operation, such as $k_i \mid n_i$ for $\divideop$.
+
+\paragraph{Example.} Two hardware instructions and a kernel's use of them.
+The thread-value maps are transcribed from the PTX ISA fragment
+tables~\cite{ptx}. For
+\texttt{mma.m16n8k16}, lane $4g + t_4$ holds four accumulator values
+$(v_m, v_n)$, at row $g + 8v_m$ and column $2t_4 + v_n$ of the $16 \times 8$
+tile; with the tile row-major,
+\[
+F_C = \big((8,4),(2,2)\big){:}\big((8,2),(64,1)\big) : \tv \to \logical .
+\]
+For \texttt{ldmatrix}, lane $4g + q$ holds elements $(g, 2q)$ and $(g, 2q+1)$
+of an $8 \times 8$ matrix,
+\[
+F_{\mathrm{ld}} = \big((8,4),2\big){:}\big((8,2),1\big) : \tv \to \logical .
+\]
+Printed as CuTe prints thread-value layouts, one cell per element of the tile,
+labelled with the lane and value that hold it and coloured by lane:
+\input{figures/cute-fragments}
+A kernel uses them through the operations. Two warps, $W = 2{:}1$, computing
+a $16 \times 16$ tile side by side have the thread-value map
+\[
+\divideop\big(\mathrm{canonical}((16,16)),\ (16,8)\big) \circ \interleave(F_C, W),
+\]
+with domain $(\text{warp}, (\text{lane}, \text{value}))$, and one warp loading
+the four $8 \times 8$ matrices of an $8 \times 32$ tile with
+\texttt{ldmatrix.x4} has
+\[
+\divideop\big(\mathrm{canonical}((8,32)),\ (8,8)\big) \circ \interleave(F_{\mathrm{ld}}, 4{:}1),
+\]
+with domain $(\text{matrix}, (\text{lane}, \text{value}))$. Coloured by warp
+and by matrix respectively; in the first, cells are labelled by the thread
+$32w + \text{lane}$:
+\input{figures/cute-two-warps}
+\input{figures/cute-ldmatrix-x4}
+Both are dense bijections, as Definition~\ref{def:validity} requires of a map
+into $\logical$. Composed onto storage they become address maps, and
+Section~\ref{sec:decide} emits their code. With the $16 \times 16$ tile
+stored row-major with leading dimension $24$, that is with
+$(16,16){:}(24,1) : \logical \to \physical$ in place of
+$\mathrm{canonical}((16,16))$, the two-warp map is decided to be a layout and
+the emitted address is
+\begin{center}
+\verb|8*c0 + 24*c1_0_0 + 2*c1_0_1 + 192*c1_1_0 + c1_1_1|
+\end{center}
+where \verb|c0| is the warp and \verb|c1_0_0|, \verb|c1_0_1|,
+\verb|c1_1_0|, \verb|c1_1_1| are $g$, $t_4$, $v_m$, $v_n$: the address
+$24(g + 8v_m) + 8w + 2t_4 + v_n$. The slice for warp $1$
+(Section~\ref{sec:restrict}) is
+\begin{center}
+\verb|24*c1_0_0 + 2*c1_0_1 + 192*c1_1_0 + c1_1_1 + 8|
+\end{center}
+With the $8 \times 32$ tile stored with leading dimension $40$, the
+\texttt{ldmatrix} map emits
+\begin{center}
+\verb|8*c0 + 40*c1_0_0 + 2*c1_0_1 + c1_1|
+\end{center}
+with \verb|c0| the matrix and \verb|c1_0_0|, \verb|c1_0_1|, \verb|c1_1|
+the lane's $g$ and $q$ and the value $v$. The tests build the same
+construction for a $32 \times 16$ tile and four warps, and the
+\texttt{ldmatrix} reader of a GEMM mainloop (Section~\ref{sec:eval}).
+
+\paragraph{Usage.} The table lists the idioms CUTLASS kernels are written
+with and what each is in our algebra. $L|_{x = v}$ fixes the entries named
+$x$ to $v$ (Definition~\ref{def:restrict}). $F : \tv \to \logical$ is a valid
+map, such as $F_C$ above; $W$ is a dense bijection arranging the warps, as
+above; and $T : \logical \to \tv$ is a dense bijection from the positions of
+a tile to the threads.
+
+\begin{center}\small
+\begin{tabular}{@{}p{0.34\linewidth}p{0.62\linewidth}@{}}
+\toprule
+\textbf{CuTe} & \textbf{Our algebra} \\
+\midrule
+\texttt{make\_layout(S, D)} & $S{:}D$, modes reversed \\
+\texttt{composition(A, B)} & $A \circ B$ \\
+\texttt{complement(B, M)} & rest of $\divideop(\mathrm{canonical}(R), S)$, above \\
+\texttt{logical\_divide(A, S)}, \texttt{zipped\_divide} & $\divideop(A, S)$ \\
+\texttt{local\_tile(A, S, b)} & $\divideop(A,S)\big|_{\mathrm{rest} = b}$ \\
+\texttt{local\_partition(A, T, t)} & $\divideop(A, S_T)\big|_{\mathrm{tile} = \mathrm{inverse}(T)(t)}$ \\
+\texttt{partition\_A/B/C}, \texttt{tensor(\_, k)} & $(A \circ F)\big|_{\mathrm{thread} = t}$; $A\big|_{k}$ \\
+\texttt{logical\_product(A, B)}, \texttt{blocked\_product}, \texttt{tile\_to\_shape} & $\repeatop(A, B)$, $A$ a dense bijection \\
+\texttt{raked\_product(A, B)} & $\repeatop(A, B)$ with the two coordinate groups exchanged in each mode \\
+\texttt{logical\_product(B, A)}, copies first & $\interleave(A, B)$, $B$ a dense bijection, up to the order of the groups \\
+stride-$0$ modes & $\broadcast(L, S)$; read-only \\
+\texttt{Swizzle<B,M,S>} $\circ\ L$ & $\sigma \circ L$ with $b = B$, $\mathit{dst} = M$, $\mathit{src} = M{+}S$ (Definition~\ref{def:swizzle}) \\
+$k$-stage pipeline buffer & $\repeatop(L, k{:}1)$ \\
+\texttt{TiledCopy}: \texttt{partition\_S/D}, vector width $v$ & $\divideop(A, (1,v)) \circ \interleave(v{:}1,\ 32{:}1)$ over the lanes \\
+\texttt{TiledMMA}: $F$ over a CTA tile with warp grid $W$ & $\divideop(A, S_F) \circ \interleave(F, W)$ \\
+\texttt{right\_inverse(L)}; \texttt{retile\_S/D} & $\mathrm{inverse}(L)$; $\mathrm{inverse}(F_{\mathrm{mma}}) \circ F_{\mathrm{copy}}$ \\
+\texttt{coalesce} & not needed: the kernel declares the shape it iterates \\
+\texttt{group\_modes}, \texttt{select}, \texttt{flatten} & regrouping the shape; same function \\
+\texttt{recast}, \texttt{upcast} by $v$ & $\divideop(A, (1,\dots,1,v))$; the change of element size is outside the algebra \\
+TMA box $S$; multicast & $\divideop(A, S)$; $\broadcast$ across CTAs \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Every row is one of composition, $\divideop$, $\restrict$, $\repeatop$,
+$\interleave$, $\broadcast$, a swizzle, $\mathrm{inverse}$, or a regrouping of
+a shape.

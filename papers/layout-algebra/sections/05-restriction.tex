@@ -1,0 +1,40 @@
+\section{Restriction}\label{sec:restrict}
+
+A warp or a thread uses one slice of an address map: the map with its own
+warp and thread coordinates fixed.
+
+\begin{definition}[Restriction]\label{def:restrict}
+Let $f : \mathrm{Coord}(S) \to \N$ with $S = (n_1,\dots,n_m)$ flat, let
+$F \subseteq \{1,\dots,m\}$, and let $p_i \in [0,n_i)$ for each $i \in F$.
+The \emph{restriction} of $f$ to $p$ is the map $f|_p$ on the coordinates of
+the shape $(n_i)_{i \notin F}$ given by
+\[
+f|_p(c) = f(c'), \qquad
+c'_i = \begin{cases} p_i & i \in F,\\ c_i & i \notin F. \end{cases}
+\]
+\end{definition}
+
+$f|_p$ is in general not a layout: $f|_p(\mathbf{0})$ is the contribution
+of the fixed entries, which need not be $0$, while every layout vanishes at
+$\mathbf{0}$.
+
+$f|_p$ is in general not dense, since its image omits the other slices, so
+it is not a valid map into $\logical$ or $\tv$ (Definition~\ref{def:validity})
+and cannot be the right operand of a composition
+(Definition~\ref{def:compose}). Restriction is therefore allowed only for
+maps into $\physical$, and is applied after composition, where the warp and
+thread coordinates are entries of the composite's domain. Restricting a
+restriction is restricting by the union of the fixed entries.
+\claude{Question for An: a slice is decided for one fixed $p$, and different $p$ can give different forms. E.g.\ TV $(6,4){:}(4,1)$ into storage $(4,6){:}(8,1)$: thread~1's slice is $4 + (2,2){:}(4,1)$, threads~0 and~2 are $4{:}1$. In a kernel $p$ is a run-time thread id; how does codegen handle that?}
+
+The address expression of a slice is Section~\ref{sec:decide} applied to
+$f|_p - f|_p(\mathbf{0})$, which vanishes at the origin, plus the constant
+$f|_p(\mathbf{0})$; when that map is not a layout, the composite's expression
+is emitted with the fixed coordinates replaced by their values. The difference
+can take negative values, which is why Section~\ref{sec:decide} is stated
+over $\Z$: for $(2,2){:}(2,1)$ under the swizzle $\{1;1;0\}$,
+$f(a,b) = (2a+b) \oplus a$, fixing $a = 1$ gives $f|_p(b) = 3 - b$ and
+$f|_p - f|_p(\mathbf{0}) = -b$. The emitted arithmetic then carries a negative
+coefficient. For
+$f = (4,8,4){:}(32,1,8)$, $F = \{1\}$ and $p_1 = 2$, the slice is
+$f|_p(r,v) = 64 + r + 8v$.

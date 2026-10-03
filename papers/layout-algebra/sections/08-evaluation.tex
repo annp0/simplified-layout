@@ -1,0 +1,36 @@
+\section{Evaluation}\label{sec:eval}
+
+The implementation\footnote{\url{https://github.com/annp0/simplified-layout}}
+is 983 lines of OCaml; the tests are 2{,}305.
+\claude{These line counts match no counting of the tree. The 2026-09-19 draft generates every number in this section from the test suite (\texttt{papers/eval.sh}); suggest re-adopting that.}
+
+\paragraph{The decision procedure is correct.} The criterion of
+Lemma~\ref{lem:dense} agrees with enumeration on 400 random layouts. The scan of
+Theorem~\ref{thm:decide} is compared with an oracle that tries every chain of
+divisors of $n$ and checks the strides it forces at every point. Over every
+function $g : [0,n) \to [0,k)$ with $g(0) = 0$, for
+$n \in \{2,3,4,6,8,9,12\}$ and $k = 5$ if $n \le 4$, $3$ otherwise, that is
+186{,}293 functions, the two accept the same 58, with the same chain.
+
+\paragraph{It matters in practice.} Of the 178 layouts the tests build from
+CUTLASS's atoms and CuTe's examples, 147 are affine in their coordinates, 9
+are layouts of a refinement with one coordinate split, and 22 are not layouts
+and are emitted as composites. On 600 random composites of a dense bijection
+with a padded storage map, 524 are layouts of some refinement, and their
+emitted forms contain 686 divisions and moduli where the composites contain
+1{,}026. With a random swizzle on the storage map, none of 300 is a layout.
+\claude{Three numbers here disagree with the tests: 524 should be 531, 686 should be 646, and 1{,}026 should be 976 (the seeds are fixed; the prose was transcribed once and left behind). The 178/147/9/22 were right for An's tree but became 207/172/11/24 once two coverage gaps in the oracle were closed.}
+
+\paragraph{The algebra is enough for a kernel.} The SM90 GMMA $64 \times
+128$ accumulator, built from the SM80 \texttt{mma.m16n8k16} $C$ fragment as
+\[
+\divideop\big(\mathrm{canonical}((64,128)),\ (16,8)\big) \circ
+\interleave\big(F_C,\ \mathrm{canonical}((4,16))\big),
+\]
+equals NVIDIA's printed layout at all 8192 coordinates. A GEMM mainloop
+built from the operations alone, an $8 \times 32$ tile of 16-bit elements
+copied in 16-byte vectors by one warp into two shared-memory stages of the
+SW64 atom and read back by \texttt{ldmatrix}, with the writer and reader of
+Section~\ref{sec:cute} and the stages by $\repeatop$, is consistent: for
+every element, the address the copy writes is the address the \texttt{mma}
+operand is read from.

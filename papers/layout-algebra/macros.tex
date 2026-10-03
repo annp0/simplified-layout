@@ -1,0 +1,52 @@
+% Theorem environments, listings style, and notation.
+
+\newtheorem{theorem}{Theorem}
+\newtheorem{lemma}{Lemma}
+\newtheorem{proposition}{Proposition}
+\newtheorem{corollary}{Corollary}
+\theoremstyle{definition}
+\newtheorem{definition}{Definition}
+\newtheorem{remark}{Remark}
+\newtheorem{example}{Example}
+
+\lstset{
+  basicstyle=\ttfamily\small,
+  keywordstyle=\bfseries,
+  columns=fullflexible,
+  keepspaces=true,
+  language=ML,
+  morekeywords={val,type,of,let,match,with},
+}
+
+\newcommand{\bound}[1]{\mathrm{B}\,#1}
+\newcommand{\shape}{\mathrm{shape}}
+\newcommand{\size}{\mathrm{size}}
+\newcommand{\cosize}{\mathrm{cosize}}
+\newcommand{\eval}{\mathrm{eval}}
+\newcommand{\canon}[2]{\langle #1 \rangle_{#2}}
+\newcommand{\logical}{\textrm{logical}}
+\newcommand{\physical}{\textrm{physical}}
+\newcommand{\tv}{\textrm{thread-value}}
+\newcommand{\divideop}{\mathrm{divide}}
+\newcommand{\repeatop}{\mathrm{repeat}}
+\newcommand{\interleave}{\mathrm{interleave}}
+\newcommand{\broadcast}{\mathrm{broadcast}}
+\newcommand{\restrict}{\mathrm{restrict}}
+\newcommand{\N}{\mathbb{N}}
+\newcommand{\Z}{\mathbb{Z}}
+
+
+% Review comments. \xiaotian{...} prints an inline note in blue, \claude{...} in orange.
+% Put \commentsfalse in the main file to hide every comment, e.g. for a submission build.
+\newif\ifcomments
+\commentstrue
+\newcommand{\xiaotian}[1]{\ifcomments\textcolor{blue}{[\textbf{Xiaotian:} #1]}\fi}
+% \claude{...}: a change Claude proposes, in orange, left for Xiaotian to accept or reject.
+\definecolor{claudecolor}{RGB}{204,85,0}
+\newcommand{\claude}[1]{\ifcomments\textcolor{claudecolor}{[\textbf{Claude:} #1]}\fi}
+% Text Claude wrote, in green: \claudeadded{...} inline, or the claudeadded
+% environment around whole paragraphs or sections. Unlike the notes above it is
+% proposed content, so \commentsfalse keeps it and only drops the colour.
+\definecolor{claudeaddcolor}{RGB}{0,128,80}
+\newcommand{\claudeadded}[1]{{\ifcomments\color{claudeaddcolor}\fi #1}}
+\newenvironment{claudeaddedtext}{\ifcomments\color{claudeaddcolor}\fi}{}

@@ -1,0 +1,120 @@
+\section{Our construction of layouts}\label{sec:layouts}
+
+We build on top of Definition~\ref{def:layout}. First we define the spaces.
+
+\begin{definition}[Spaces]\label{def:spaces}
+Each side of a layout carries a space from $\{\logical, \physical, \tv\}$,
+written $A \to B$. A layout may be annotated $A \to B$ for
+$A, B \in \{\logical, \tv\}$, or $\logical \to \physical$, and no other pair is
+constructible. Composition takes $A \to \logical$ and $\logical \to C$ to
+$A \to C$, so $\tv \to \physical$ exists only as a composite.
+\end{definition}
+
+\begin{definition}[Replication]\label{def:linear}
+Extend Definition~\ref{def:layout} by allowing the stride against a positive
+integer $n$ to be the mark $\bot$ in place of an integer, with
+\[
+(n{:}\bot)(i) = 0 \quad\text{for every } i \in [0,n).
+\]
+\end{definition}
+
+A zero stride is rejected rather than read as replication. This is because
+replication is legal for reads and not for writes, since simultaneous loads of
+one address are a broadcast while simultaneous stores are a race. It is better
+not to use $0$, so that the two can never be mixed.
+
+\begin{definition}[Swizzled layout]\label{def:swizzle}
+A \emph{swizzle} is a bijection $\physical \to \physical$ of the form
+\[
+\sigma(x) \;=\; x \oplus \big(((x \gg \mathit{src}) \wedge (2^{b}-1)) \ll
+\mathit{dst}\big),
+\]
+its two fields $[\mathit{src},\mathit{src}{+}b)$ and
+$[\mathit{dst},\mathit{dst}{+}b)$ disjoint. A layout $A \to \physical$
+followed by a swizzle is a \emph{swizzled layout}, again $A \to \physical$.
+\end{definition}
+
+A swizzle runs from $\physical$ to $\physical$, so it can only ever be the last
+step, and being a bijection it sends distinct addresses to distinct addresses.
+It therefore leaves the conditions below untouched, and matters only in the
+arithmetic that is finally emitted.
+
+\begin{definition}[Composition]\label{def:compose}
+Let $f : A \to \logical$ and let $g : \logical \to C$ have domain shape $S_g$.
+The \emph{composite} $g \circ f : A \to C$ is defined when $f$ is a dense
+bijection onto $[0, \size S_g)$, and is the map
+\[
+g \circ f \;=\; c \mapsto g\big(\mathrm{unflatten}_{S_g}(f(c))\big),
+\]
+whose domain shape is that of $f$.
+\end{definition}
+
+A chain is therefore one $\tv \to \logical$ map, then any number of
+$\logical \to \logical$ maps, then one $\logical \to \physical$ map.
+
+\begin{definition}[Declared replicas]\label{def:replica}
+For a layout $L$ with domain shape $S$, define a relation $\sim_L$ on
+$\mathrm{Coord}(S)$:
+\begin{itemize}
+\item if $L$ is a layout, $c \sim_L c'$ when $c$ and $c'$ agree at every
+mode whose stride is an integer, that is, they differ only at modes
+with stride $\bot$;
+\item if $L = g \circ f$ with $g$ of domain shape $S_g$, then $c \sim_L c'$ when
+$\mathrm{unflatten}_{S_g}(f(c)) \sim_g \mathrm{unflatten}_{S_g}(f(c'))$.
+\end{itemize}
+\end{definition}
+
+\begin{definition}[Validity]\label{def:validity}\label{sec:validity}
+Let $L : A \to B$ be a layout with domain shape $S$. Then $L$ is \emph{valid}
+when
+\[
+\begin{cases}
+L \text{ is a dense bijection}
+  & \text{if } B \in \{\logical, \tv\},\\[2pt]
+L(c) = L(c') \implies c \sim_L c'
+  & \text{if } B = \physical.
+\end{cases}
+\]
+It is \emph{write-valid} when $B = \physical$ and in addition
+\[
+L(c) = L(c') \implies c = c'.
+\]
+Only a write-valid layout may be the target of a store.
+\claude{State the scope: validity rules out \emph{partially} overlapping layouts, e.g.\ sliding windows as used for convolution, since $\bot$ can only replicate a whole mode. If convolution is out of scope, say so here; otherwise a read-only overlap mark is needed. (Question for An.)}
+\end{definition}
+
+Whether a layout is a dense bijection can be decided without enumeration.
+
+\begin{lemma}[Dense bijections]\label{lem:dense}
+Let $L$ be a layout with no stride $\bot$, its modes carrying sizes
+$n_1,\dots,n_k$ and strides $s_1,\dots,s_k$ with every $n_i \ge 2$, and put
+$N = \prod_i n_i$. Then $L$ is a dense bijection onto $[0,N)$ if and only if,
+after sorting the modes by stride, $s_{(1)} = 1$ and
+$s_{(j+1)} = s_{(j)}\,n_{(j)}$ for every $j$: the sorted strides are the
+running products of the sorted sizes.
+\end{lemma}
+
+\begin{proof}
+($\Leftarrow$) With running-product strides the map is the flattening of
+Definition~\ref{def:layout} for the shape $(n_{(k)},\dots,n_{(1)})$, a
+bijection onto $[0,N)$.
+Positions of size $1$ contribute nothing and are dropped beforehand.
+
+($\Rightarrow$) Sort the modes by stride and write $N_j = \prod_{i \le j} n_{(i)}$
+(so $N_0 = 1$). \emph{Claim:} $s_{(j)} \le N_{j-1}$ for every $j$. Every image
+value below $s_{(j)}$ comes from a coordinate supported on modes
+$1,\dots,j{-}1$, since a nonzero index at any later mode contributes at
+least $s_{(j)}$ and no contribution is negative; those modes produce at
+most $N_{j-1}$ distinct values, so surjectivity onto $[0,s_{(j)})$ forces
+$s_{(j)} \le N_{j-1}$. Consequently
+\[
+\textstyle\sum_j (n_{(j)}-1)\,s_{(j)} \;\le\; \sum_j (n_{(j)}-1)\,N_{j-1}
+\;=\; N - 1,
+\]
+the last equality by telescoping. But the left side is the maximum of the
+image, and surjectivity onto $[0,N)$ requires the maximum to be exactly
+$N-1$. The two sums therefore agree, and since each term on the left is at most
+the corresponding term on the right, they agree termwise; as
+$n_{(j)} - 1 \ge 1$ this gives $s_{(j)} = N_{j-1}$ for every $j$, which is the
+running-product condition.
+\end{proof}

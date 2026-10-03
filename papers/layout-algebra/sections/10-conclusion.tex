@@ -1,0 +1,32 @@
+\begin{claudeaddedtext}
+\section{Conclusion}\label{sec:conclusion}
+\end{claudeaddedtext}
+\claude{New section, drafted by Claude. The last paragraph keeps the content
+of An's former Section~9, ``The DSL this serves'', and adds the compiler as the
+immediate next step.}
+
+\begin{claudeaddedtext}
+CuTe's layout algebra describes how tiles of tensors map onto threads and
+memory, but its operations are guarded by at least six interacting
+admissibility conditions, and none of them is visible in its API. We restrict
+what a layout can be instead. Every layout declares the space of its input and
+of its output, and the space it maps into fixes what it must satisfy: a dense
+bijection into logical or thread-value indices, and alias-freedom, up to
+declared replicas, into physical offsets. With that restriction composition
+needs a single condition, the complement is no longer needed as an operation,
+and division, repetition, interleaving, broadcast and inversion are given by
+direct formulas. Whether a composite is again a layout is decided rather than
+searched for: one pass checks separability and a linear scan recognizes each
+coordinate, and codegen emits the coarsest form or, failing that, the
+composite. A thread's slice is taken last, by restriction. CuTe's operations
+are reproduced on its documented examples, the atoms and usage patterns of
+CUTLASS are rederived, and the decision procedure is mechanized in Coq.
+\end{claudeaddedtext}
+
+The algebra is built for a GPU DSL in which each warp is a SIMD program and
+warps communicate through pipes, in the sense of Unix pipes, lowered to
+mbarriers at compile time. The layouts of this paper describe how the lanes of
+a warp access a tile. \claudeadded{The immediate next step is the compiler that connects
+the two: one that consumes these layouts and emits GPU code, so that kernels
+built from the algebra alone can be measured against their CuTe counterparts,
+in run time and in the code generated.}

@@ -1,0 +1,82 @@
+\begin{center}
+\begin{minipage}[t]{0.48\linewidth}\centering
+$L = (4,6){:}(6,1)$, coloured by tile\\[4pt]
+\begin{tikzpicture}[x={(0cm,-0.6cm)},y={(0.6cm,0cm)},every node/.style={minimum size=0.6cm, outer sep=0pt, font=\small}]
+\node[fill={rgb,255:red,175;green,175;blue,255}] at (0,0) {0};
+\node[fill={rgb,255:red,175;green,175;blue,255}] at (0,1) {1};
+\node[fill={rgb,255:red,175;green,175;blue,255}] at (0,2) {2};
+\node[fill={rgb,255:red,175;green,255;blue,175}] at (0,3) {3};
+\node[fill={rgb,255:red,175;green,255;blue,175}] at (0,4) {4};
+\node[fill={rgb,255:red,175;green,255;blue,175}] at (0,5) {5};
+\node[fill={rgb,255:red,175;green,175;blue,255}] at (1,0) {6};
+\node[fill={rgb,255:red,175;green,175;blue,255}] at (1,1) {7};
+\node[fill={rgb,255:red,175;green,175;blue,255}] at (1,2) {8};
+\node[fill={rgb,255:red,175;green,255;blue,175}] at (1,3) {9};
+\node[fill={rgb,255:red,175;green,255;blue,175}] at (1,4) {10};
+\node[fill={rgb,255:red,175;green,255;blue,175}] at (1,5) {11};
+\node[fill={rgb,255:red,255;green,255;blue,175}] at (2,0) {12};
+\node[fill={rgb,255:red,255;green,255;blue,175}] at (2,1) {13};
+\node[fill={rgb,255:red,255;green,255;blue,175}] at (2,2) {14};
+\node[fill={rgb,255:red,255;green,175;blue,175}] at (2,3) {15};
+\node[fill={rgb,255:red,255;green,175;blue,175}] at (2,4) {16};
+\node[fill={rgb,255:red,255;green,175;blue,175}] at (2,5) {17};
+\node[fill={rgb,255:red,255;green,255;blue,175}] at (3,0) {18};
+\node[fill={rgb,255:red,255;green,255;blue,175}] at (3,1) {19};
+\node[fill={rgb,255:red,255;green,255;blue,175}] at (3,2) {20};
+\node[fill={rgb,255:red,255;green,175;blue,175}] at (3,3) {21};
+\node[fill={rgb,255:red,255;green,175;blue,175}] at (3,4) {22};
+\node[fill={rgb,255:red,255;green,175;blue,175}] at (3,5) {23};
+\draw[color=black,thick,step=0.6cm,shift={(-0.5,-0.5)}] (0,0) grid (4,6);
+\node[anchor=east,minimum size=0pt,font=\footnotesize] at (0,-0.6) {\texttt{0}};
+\node[anchor=east,minimum size=0pt,font=\footnotesize] at (1,-0.6) {\texttt{1}};
+\node[anchor=east,minimum size=0pt,font=\footnotesize] at (2,-0.6) {\texttt{2}};
+\node[anchor=east,minimum size=0pt,font=\footnotesize] at (3,-0.6) {\texttt{3}};
+\node[minimum size=0pt,font=\footnotesize] at (-0.85,0) {\texttt{0}};
+\node[minimum size=0pt,font=\footnotesize] at (-0.85,1) {\texttt{1}};
+\node[minimum size=0pt,font=\footnotesize] at (-0.85,2) {\texttt{2}};
+\node[minimum size=0pt,font=\footnotesize] at (-0.85,3) {\texttt{3}};
+\node[minimum size=0pt,font=\footnotesize] at (-0.85,4) {\texttt{4}};
+\node[minimum size=0pt,font=\footnotesize] at (-0.85,5) {\texttt{5}};
+\end{tikzpicture}
+\end{minipage}\hfill
+\begin{minipage}[t]{0.48\linewidth}\centering
+$\divideop(L,(2,3))$: tile coordinate $(t_1,t_2)$ as row, tile $(b_1,b_2)$ as column\\[4pt]
+\begin{tikzpicture}[x={(0cm,-0.6cm)},y={(0.6cm,0cm)},every node/.style={minimum size=0.6cm, outer sep=0pt, font=\small}]
+\node[fill={rgb,255:red,175;green,175;blue,255}] at (0,0) {0};
+\node[fill={rgb,255:red,175;green,255;blue,175}] at (0,1) {3};
+\node[fill={rgb,255:red,255;green,255;blue,175}] at (0,2) {12};
+\node[fill={rgb,255:red,255;green,175;blue,175}] at (0,3) {15};
+\node[fill={rgb,255:red,175;green,175;blue,255}] at (1,0) {1};
+\node[fill={rgb,255:red,175;green,255;blue,175}] at (1,1) {4};
+\node[fill={rgb,255:red,255;green,255;blue,175}] at (1,2) {13};
+\node[fill={rgb,255:red,255;green,175;blue,175}] at (1,3) {16};
+\node[fill={rgb,255:red,175;green,175;blue,255}] at (2,0) {2};
+\node[fill={rgb,255:red,175;green,255;blue,175}] at (2,1) {5};
+\node[fill={rgb,255:red,255;green,255;blue,175}] at (2,2) {14};
+\node[fill={rgb,255:red,255;green,175;blue,175}] at (2,3) {17};
+\node[fill={rgb,255:red,175;green,175;blue,255}] at (3,0) {6};
+\node[fill={rgb,255:red,175;green,255;blue,175}] at (3,1) {9};
+\node[fill={rgb,255:red,255;green,255;blue,175}] at (3,2) {18};
+\node[fill={rgb,255:red,255;green,175;blue,175}] at (3,3) {21};
+\node[fill={rgb,255:red,175;green,175;blue,255}] at (4,0) {7};
+\node[fill={rgb,255:red,175;green,255;blue,175}] at (4,1) {10};
+\node[fill={rgb,255:red,255;green,255;blue,175}] at (4,2) {19};
+\node[fill={rgb,255:red,255;green,175;blue,175}] at (4,3) {22};
+\node[fill={rgb,255:red,175;green,175;blue,255}] at (5,0) {8};
+\node[fill={rgb,255:red,175;green,255;blue,175}] at (5,1) {11};
+\node[fill={rgb,255:red,255;green,255;blue,175}] at (5,2) {20};
+\node[fill={rgb,255:red,255;green,175;blue,175}] at (5,3) {23};
+\draw[color=black,thick,step=0.6cm,shift={(-0.5,-0.5)}] (0,0) grid (6,4);
+\node[anchor=east,minimum size=0pt,font=\footnotesize] at (0,-0.6) {\texttt{(0,0)}};
+\node[anchor=east,minimum size=0pt,font=\footnotesize] at (1,-0.6) {\texttt{(0,1)}};
+\node[anchor=east,minimum size=0pt,font=\footnotesize] at (2,-0.6) {\texttt{(0,2)}};
+\node[anchor=east,minimum size=0pt,font=\footnotesize] at (3,-0.6) {\texttt{(1,0)}};
+\node[anchor=east,minimum size=0pt,font=\footnotesize] at (4,-0.6) {\texttt{(1,1)}};
+\node[anchor=east,minimum size=0pt,font=\footnotesize] at (5,-0.6) {\texttt{(1,2)}};
+\node[rotate=90,anchor=west,minimum size=0pt,font=\footnotesize] at (-0.6,0) {\texttt{(0,0)}};
+\node[rotate=90,anchor=west,minimum size=0pt,font=\footnotesize] at (-0.6,1) {\texttt{(0,1)}};
+\node[rotate=90,anchor=west,minimum size=0pt,font=\footnotesize] at (-0.6,2) {\texttt{(1,0)}};
+\node[rotate=90,anchor=west,minimum size=0pt,font=\footnotesize] at (-0.6,3) {\texttt{(1,1)}};
+\end{tikzpicture}
+\end{minipage}
+\end{center}

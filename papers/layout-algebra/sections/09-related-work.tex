@@ -1,0 +1,27 @@
+\section{Related work}\label{sec:related}
+
+\textbf{CuTe}~\cite{cutedocs,cecka} is the system under study; its operations
+and their conditions are stated in Section~\ref{sec:intro}.
+\textbf{Shah}~\cite{shah} formalizes the algebra and gives the conditions
+under which the composite of two layouts is again a layout. In our algebra
+that is decided after the fact by Theorem~\ref{thm:decide}, and a composite
+that is not a layout is still a legal map. \textbf{Carlisle et
+al.}~\cite{categorical} model a class of CuTe layouts as morphisms of two
+categories, define composition, logical product and logical division on the
+morphisms, and characterize the layouts so obtained. \textbf{Linear
+layouts}~\cite{triton}, in Triton, represent a layout as a matrix over
+$\mathbb{F}_2$ acting on the bits of the hardware index, which gives generic
+layout-to-layout conversion; a swizzle of Definition~\ref{def:swizzle} is such
+a matrix. \textbf{Bhaskaracharya et al.}~\cite{isl} represent both CuTe
+layouts and linear layouts as integer set relations in ISL and implement
+composition, inversion and complement with its operations; the question of
+Section~\ref{sec:decide} can be posed there, and Theorem~\ref{thm:decide}
+answers it without a solver. \textbf{Axe}~\cite{axe} maps logical
+coordinates to a multi-axis physical space through named axes and unifies
+tiling, sharding, replication and offsets from device meshes to threads; its
+replication is explicit, as $\broadcast$ is in our algebra, and its
+Appendix~A.2.1 uses the floor expansion and first differences of
+Section~\ref{sec:decide} to prove a normalized representation unique.
+\textbf{Halide}~\cite{halide}, \textbf{TVM}~\cite{tvm} and
+\textbf{MLIR}~\cite{mlir} carry general integer expression simplifiers;
+Section~\ref{sec:decide} decides the layout question directly instead.
