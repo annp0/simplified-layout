@@ -36,7 +36,7 @@ for src in "$here"/*.cpp; do
 done
 
 # The figures the paper quotes, as \newcommands, so none is transcribed.
-# Generated here rather than in paper/eval.sh because this needs CUTLASS
+# Generated here rather than in papers/eval.sh because this needs CUTLASS
 # and CCCL checkouts, which the rest of the build does not.
 grep '^#cute ' "$raw" | awk '
 function group(v,   t, r) {

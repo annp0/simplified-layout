@@ -1,8 +1,8 @@
 # CuTe, measured
 
-The paper asserts that CuTe's admissibility conditions "are not visible in
-the CuTe API, yet all of them are visible failures"
-(`paper/layout-algebra.tex`). This directory turns that assertion into a
+The paper (`papers/layout-algebra/`) states that CuTe's admissibility
+conditions are not checked in general, and that where they fail the result
+is wrong without a diagnostic. This directory turns that claim into a
 measurement.
 
     ./run.sh          # build and run against a CUTLASS checkout

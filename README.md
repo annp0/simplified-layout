@@ -1,7 +1,7 @@
 # layouts
 
 A layout algebra for GPU tensor kernels, in OCaml, and the paper describing it
-(`paper/layout-algebra.tex`).
+(`papers/layout-algebra/layout-algebra.tex`).
 
 A layout maps the coordinates of a tile to integers. Every layout names the
 space its input and output live in: a logical index, a thread-value index, or a
@@ -32,7 +32,9 @@ otherwise.
                           from the SM80 fragment, a GEMM mainloop built from the operations alone
       test_simplifier     the decision procedure against brute force, and on random layouts
       test_usage_table    every formula of the paper's usage table, built as printed
-    paper/
+    papers/
+      layout-algebra/     the paper: layout-algebra.tex inputs sections/ and figures/
+      archive/            earlier single-file drafts, kept for reference
 
 ## Build
 
@@ -59,13 +61,16 @@ with the paper and for what is not covered.
 Every figure in the paper's evaluation is generated from a run of the test
 suite rather than transcribed into the prose:
 
-    ./paper/eval.sh            # rewrite paper/eval-numbers.tex
-    ./paper/eval.sh --check    # fail if it is stale (for CI)
+    ./papers/eval.sh            # rewrite papers/eval-numbers.tex
+    ./papers/eval.sh --check    # fail if it is stale (for CI)
 
 Each suite prints one `#eval KEY VALUE` line per figure; the script sums by
 key across the suites and writes the `\newcommand`s that
-`paper/layout-algebra.tex` inputs. Both random generators are seeded, so a
-rerun on the same tree reproduces every number.
+`papers/layout-algebra/layout-algebra.tex` inputs. Both random generators are
+seeded, but the random layouts also depend on OCaml's `Random` (which changed
+in OCaml 5.0) and on Base's `List.permute`, so a rerun reproduces every number
+only with the same toolchain. The committed figures were produced with OCaml
+5.2.0 and Base v0.17.3.
 
 ## CuTe, measured
 
