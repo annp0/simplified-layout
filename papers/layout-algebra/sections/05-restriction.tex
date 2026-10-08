@@ -25,7 +25,6 @@ and cannot be the right operand of a composition
 maps into $\physical$, and is applied after composition, where the warp and
 thread coordinates are entries of the composite's domain. Restricting a
 restriction is restricting by the union of the fixed entries.
-\claude{Question for An: a slice is decided for one fixed $p$, and different $p$ can give different forms. E.g.\ TV $(6,4){:}(4,1)$ into storage $(4,6){:}(8,1)$: thread~1's slice is $4 + (2,2){:}(4,1)$, threads~0 and~2 are $4{:}1$. In a kernel $p$ is a run-time thread id; how does codegen handle that?}
 
 The address expression of a slice is Section~\ref{sec:decide} applied to
 $f|_p - f|_p(\mathbf{0})$, which vanishes at the origin, plus the constant
@@ -38,3 +37,14 @@ $f|_p - f|_p(\mathbf{0}) = -b$. The emitted arithmetic then carries a negative
 coefficient. For
 $f = (4,8,4){:}(32,1,8)$, $F = \{1\}$ and $p_1 = 2$, the slice is
 $f|_p(r,v) = 64 + r + 8v$.
+
+A slice is decided for one fixed $p$, and different $p$ can give slices of
+different forms. The thread-value map $(6,4){:}(4,1)$ composed onto the
+storage map $(4,6){:}(8,1)$ is not a layout, and its slices for threads $0$,
+$1$ and $2$ are $4{:}1$, $4 + (2,2){:}(4,1)$ and $10 + 4{:}1$. The
+per-slice expression is therefore emitted only when $p$ is known at code
+generation time. When $p$ is known only at run time, as a thread index is,
+the code emitted is that of the unrestricted map, with the fixed coordinates
+read at run time. If the unrestricted map is a layout nothing is lost by
+this: every slice is then the same layout of the free coordinates, offset by
+the contribution of the fixed ones.

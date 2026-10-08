@@ -23,8 +23,15 @@ $\mathrm{Coord}(S) \to \N$ is defined by recursion on the shape,
 = \sum_{j=1}^{k} (S_j{:}D_j)(c_j).
 \] Flattening is a bijection $\canon{\cdot}{S} : \mathrm{Coord}(S) \to
 [0,\size S)$, taken row-major, so that the last component varies fastest, with
-inverse $\mathrm{unflatten}_S$.
-\claude{Give the formula here, e.g.\ for $S=(n_1,\dots,n_k)$, $c_k = i \bmod n_k$, $c_{k-1} = \lfloor i/n_k \rfloor \bmod n_{k-1}$, \dots. It is used in Definition~\ref{def:compose} but first written out in Section~\ref{sec:decide}.} A coordinate may therefore be given as a single
+inverse $\mathrm{unflatten}_S$. For an integer shape both are the identity,
+and for $S = (S_1,\dots,S_k)$, writing $w_j = \prod_{l>j} \size S_l$,
+\[
+\canon{(c_1,\dots,c_k)}{S} = \sum_{j=1}^{k} w_j \canon{c_j}{S_j},
+\qquad
+\mathrm{unflatten}_S(i) = \big(\mathrm{unflatten}_{S_j}(\lfloor i/w_j \rfloor
+\bmod \size S_j)\big)_{j=1}^{k}.
+\]
+A coordinate may therefore be given as a single
 integer, and we say that integer \emph{is} the coordinate. The \emph{cosize} of the layout is the least $N$ with its
 image inside $[0,N)$, which is one plus the largest value it takes. The layout
 is \emph{dense} when its image is an initial segment $[0,N)$ of the integers,
@@ -41,9 +48,10 @@ imagine it. They are a natural way to abstract and describe those mappings.
 
 The algebra has four operations. Three of them, composition, complement and
 logical division, are formalized by Shah~\cite{shah}; the fourth, logical
-product, we take from the CUTLASS implementation.
-\claude{Notation switches here without warning: Definition~\ref{def:layout} writes $S{:}D$ indexed from 1 and flattens row-major, while the complement formula and the left-divisibility conditions below use Shah's $N{:}d$, indexed from 0, in CuTe's first-fastest order. One sentence saying so, pointing to Section~\ref{sec:cute}, would fix it.}
-The \emph{complement} of a
+product, we take from the CUTLASS implementation. In stating them we follow
+Shah's notation, which lists modes as CuTe does, indexed from $0$ with the
+first varying fastest; Section~\ref{sec:cute} relates that order to the
+row-major one of Definition~\ref{def:layout}. The \emph{complement} of a
 layout
 $B = (N_0,\dots,N_\alpha){:}(d_0,\dots,d_\alpha)$, sorted by stride, with
 respect to an integer $M$, is
@@ -64,10 +72,11 @@ first mode is one copy of $A$, and its second walks $B$ through the addresses
 $A$ does not occupy, so the result is $\size B$ copies of $A$ placed in the
 pattern $B$ names.
 
-These operations are critical for constructing the layouts one usually wants.
-There is, however, a lot of complexity underneath them. Layouts are in general
+These operations are critical for constructing the layouts one usually wants,
+but they are partial: each is defined only under arithmetic side conditions on
+its operands. Layouts are in general
 non-injective and non-surjective onto $[0,M)$, and CuTe always wants to write
-the composite as a layout again. This causes at least six condition checks. Two are in the complement, whose
+the composite as a layout again. This causes at least six conditions. Two are in the complement, whose
 shape entries are quotients and so must divide: $N_{i-1}d_{i-1} \mid d_i$ for
 every $i$, and $N_\alpha d_\alpha \mid M$. The other four belong to
 composition. Write the flattened shape of $A$ as $M_0 \cdots M_\alpha$. It is \emph{left divisible} by $r$
@@ -77,9 +86,24 @@ except that $c$ need not divide $M_i$. For each mode $(N){:}(r)$ of $B$ this is
 three checks, since the prefix must divide $r$, the leftover $c$ must divide
 $M_i$, and what remains after $r$ must be weakly left divisible by $N$. One
 more is required across modes, that the intervals on which they act be pairwise
-disjoint~\cite{shah}. None of these conditions is visible in the CuTe API,
-yet all of them are visible failures.
-\claude{This paragraph lists the six conditions but never says why they are a problem. Open with the framing: CuTe's operations are partial; each is defined only under arithmetic side conditions that the API does not show, that CUTLASS mostly does not check, and that produce wrong layouts silently when they fail. Also, ``visible failures'' is unsupported and, for the complement, false: its failures are silent (the 2026-09-19 draft measures this against CUTLASS 4.8; see the archive).}
+disjoint~\cite{shah}.
+
+None of these conditions appears in the CuTe API, and CUTLASS does not in
+general check them. Composition's two divisibility conditions are written in
+its source twice over: in a strong form that is commented out, and in a weak
+form that runs only when both operands are statically known. The runtime
+assertion for the dynamic case is commented out as well, and the reason is
+given there: it ``can cause extra registers and inappropriate
+compile-time/run-time failure''. The complement's conditions are not checked
+at all; its shape entries are integer quotients, and what is asserted is only
+that they do not come out zero. The consequence is silence rather than a
+diagnostic. Sweeping the \cuteCompTotal{} rank-2 layouts and cotargets of
+Section~\ref{sec:eval}, all of them static, so this is the case CuTe
+\emph{can} check, the complement meets its own documented postconditions for
+every one of the \cuteCompSatisfied{} that satisfy both divisibility
+conditions, and fails for \cuteCompViolatedBroken{} of the
+\cuteCompViolated{} that do not, with no compile-time error, no assertion,
+and no run-time signal.
 
 We try to resolve those complexities by restricting what a layout can be.
 

@@ -1,25 +1,58 @@
 \section{Evaluation}\label{sec:eval}
 
 The implementation\footnote{\url{https://github.com/annp0/simplified-layout}}
-is 983 lines of OCaml; the tests are 2{,}305.
-\claude{These line counts match no counting of the tree. The 2026-09-19 draft generates every number in this section from the test suite (\texttt{papers/eval.sh}); suggest re-adopting that.}
+is \evalLibLines{} lines of OCaml, over \evalLibMliLines{} lines of
+interface; the tests are \evalTestLines{}. Every figure quoted below is
+generated from a run of the test suite (\texttt{papers/eval.sh}), not
+transcribed. The random generators are seeded, so a rerun with the toolchain
+the repository's README names reproduces them.
 
 \paragraph{The decision procedure is correct.} The criterion of
-Lemma~\ref{lem:dense} agrees with enumeration on 400 random layouts. The scan of
+Lemma~\ref{lem:dense} agrees with enumeration on \evalDenseRandom{} random
+layouts. The scan of
 Theorem~\ref{thm:decide} is compared with an oracle that tries every chain of
 divisors of $n$ and checks the strides it forces at every point. Over every
 function $g : [0,n) \to [0,k)$ with $g(0) = 0$, for
 $n \in \{2,3,4,6,8,9,12\}$ and $k = 5$ if $n \le 4$, $3$ otherwise, that is
-186{,}293 functions, the two accept the same 58, with the same chain.
+\evalAxisFunctions{} functions, the two accept the same \evalAxisStrided{},
+with the same chain.
 
-\paragraph{It matters in practice.} Of the 178 layouts the tests build from
-CUTLASS's atoms and CuTe's examples, 147 are affine in their coordinates, 9
-are layouts of a refinement with one coordinate split, and 22 are not layouts
-and are emitted as composites. On 600 random composites of a dense bijection
-with a padded storage map, 524 are layouts of some refinement, and their
-emitted forms contain 686 divisions and moduli where the composites contain
-1{,}026. With a random swizzle on the storage map, none of 300 is a layout.
-\claude{Three numbers here disagree with the tests: 524 should be 531, 686 should be 646, and 1{,}026 should be 976 (the seeds are fixed; the prose was transcribed once and left behind). The 178/147/9/22 were right for An's tree but became 207/172/11/24 once two coverage gaps in the oracle were closed.}
+\paragraph{CuTe's conditions are not checked, and the failure is silent.}
+The sweep quoted in Section~\ref{sec:intro} takes every rank-2 layout
+$(N_0,N_1){:}(d_0,d_1)$ with $N_0, N_1 \in \{2,3,4\}$, $d_0 \in \{1,2\}$ and
+$d_1 \le 16$, against cotargets $M \in \{12,24,48\}$, keeping those for which
+the complement formula is defined at all; CuTe rejects $d_1 < N_0 d_0$ with
+a \texttt{static\_assert}, the one condition it does enforce. Every entry is a
+static integer, so nothing here is hidden from the compiler. Each complement is
+checked against the postconditions CuTe's own unit test asserts: that
+$\cosize(A, A^{*})$ reach $M$, that $A^{*}$ be ordered, and that $A^{*}$ and
+$A$ be disjoint. Cases are classified by \emph{both} of the complement's
+divisibility conditions, $N_0 d_0 \mid d_1$ and $N_1 d_1 \mid M$. Of the
+\cuteCompTotal{} cases, the \cuteCompSatisfied{} satisfying both all pass; of
+the \cuteCompViolated{} that violate one or the other,
+\cuteCompViolatedBroken{} fail. The conditions are therefore sufficient and
+not necessary, which is exactly why their absence bites: most violations
+happen to be harmless, nothing distinguishes those from the rest, and the ones
+that are not harmless fail the codomain bound, never orderedness or
+disjointness, without a diagnostic. The mechanism is plain in the formula:
+its shape entries are quotients, so when a divisibility fails the integer
+division truncates and the complement covers less than it should. For
+$(2,2){:}(1,3)$ at $M = 24$ the entry $d_1 / N_0 d_0 = 3/2$ becomes $1$, and
+$\cosize$ comes out $23$. Measured against CUTLASS 4.8; the
+harness is \texttt{study/run.sh} and needs no GPU.
+
+\paragraph{It matters in practice.} The tests build \evalLayouts{} layouts,
+from CuTe's documented examples, CUTLASS's atoms, the usage table of
+Section~\ref{sec:idioms} and the laws of Section~\ref{sec:ops}, and check
+each against its emitted expression at every coordinate. Of those,
+\evalLayoutsAffine{} are affine in their coordinates, \evalLayoutsRefined{}
+are layouts of a refinement with one coordinate split, and
+\evalLayoutsPipeline{} are not layouts and are emitted as composites. On
+\evalPairs{} random composites of a dense bijection with a padded storage
+map, \evalPairsStrided{} are layouts of some refinement, and their emitted
+forms contain \evalPairsOpsEmitted{} divisions and moduli where the
+composites contain \evalPairsOpsPipeline{}. With a random swizzle on the
+storage map, none of \evalSwizzled{} is a layout.
 
 \paragraph{The algebra is enough for a kernel.} The SM90 GMMA $64 \times
 128$ accumulator, built from the SM80 \texttt{mma.m16n8k16} $C$ fragment as
@@ -27,7 +60,8 @@ emitted forms contain 686 divisions and moduli where the composites contain
 \divideop\big(\mathrm{canonical}((64,128)),\ (16,8)\big) \circ
 \interleave\big(F_C,\ \mathrm{canonical}((4,16))\big),
 \]
-equals NVIDIA's printed layout at all 8192 coordinates. A GEMM mainloop
+equals NVIDIA's printed layout at all \evalSmNinetyCoords{} coordinates. A
+GEMM mainloop
 built from the operations alone, an $8 \times 32$ tile of 16-bit elements
 copied in 16-byte vectors by one warp into two shared-memory stages of the
 SW64 atom and read back by \texttt{ldmatrix}, with the writer and reader of

@@ -19,9 +19,8 @@ Composing $f$ with $g$ requires only that $f$'s range be exactly $g$'s
 flattened set of coordinates. To emit the index arithmetic, naively, we can
 always compute $f$, split that by division and remainder into $g$'s
 coordinates, and feed it into $g$. Often the composite can be simplified to a
-layout as well. We show that if it can be written this way the form is unique, and we emit that simplified
-form.
-\claude{``Unique'' is too strong: many forms represent the same map. Theorem~\ref{thm:decide} proves a \emph{coarsest} form exists and every other refines it. Suggest: ``there is a coarsest such form, whose digits every other one refines, and we emit that.''}
+layout as well. We show that when it can be written this way there is a
+coarsest such form, whose digits every other one refines, and we emit that.
 
 A warp's or a thread's slice is a \emph{restriction}. A restricted layout is no
 longer composable, which forces the user to settle the whole view of a tile
@@ -30,8 +29,15 @@ before taking slices.
 We validate the algebra by showing that CuTe's operations, such as composition,
 complement, and division, can be reproduced in it. Furthermore, we provide an
 implementation in OCaml, and use it to rederive the atoms and usage patterns of
-CuTe. 
+CuTe.
 
-The implementation is roughly 1{,}000 lines of OCaml.
-\claude{With Section~\ref{sec:mech} in, the abstract should say so in one sentence, e.g.\ ``The decision procedure is proved in Coq, sound and complete, and the proved scan is extracted and agrees with the implementation.'' The Coq development is about 2{,}000 lines, so ``roughly 1{,}000 lines'' should name both.}
+The decision procedure is proved in Coq, sound and complete, with no axioms
+and no admitted goals, and the proved scan is extracted to OCaml and agrees
+with the implementation, verdict and digits alike, on every map of the
+enumeration we test. We also measure the system we are replacing: CuTe does
+not check its admissibility conditions in general, and where they fail its
+complement can silently violate the postconditions CuTe's own tests assert.
+
+The implementation is roughly 1{,}000 lines of OCaml and the proofs roughly
+2{,}000 of Coq.
 \end{abstract}

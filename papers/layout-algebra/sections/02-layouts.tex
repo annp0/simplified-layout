@@ -80,8 +80,14 @@ It is \emph{write-valid} when $B = \physical$ and in addition
 L(c) = L(c') \implies c = c'.
 \]
 Only a write-valid layout may be the target of a store.
-\claude{State the scope: validity rules out \emph{partially} overlapping layouts, e.g.\ sliding windows as used for convolution, since $\bot$ can only replicate a whole mode. If convolution is out of scope, say so here; otherwise a read-only overlap mark is needed. (Question for An.)}
 \end{definition}
+
+Validity admits overlap only as the replication of whole modes: two
+coordinates may share an address only if they differ at modes of stride
+$\bot$ alone. A map whose images overlap in part, such as the sliding windows
+of a convolution, where neighbouring windows share some elements and not
+others, is therefore not valid. Such read-only overlaps are outside the scope
+of this paper.
 
 Whether a layout is a dense bijection can be decided without enumeration.
 

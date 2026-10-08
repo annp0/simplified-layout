@@ -10,9 +10,17 @@
 \input{macros}
 % \commentsfalse  % uncomment to hide review comments
 
+% Every figure in Section~\ref{sec:eval} is a macro from here, written by
+% papers/eval.sh from a run of the test suite.
+\input{../eval-numbers}
+
+% Figures measured against a CUTLASS checkout, written by study/run.sh.
+\input{../../study/cute-numbers}
+
 \title{A Simplified Layout Algebra for GPU Kernels}
-\author{Nan An\\ \texttt{annaneuorg@gmail.com}}
-\date{September 9, 2026}
+\author{Nan An\\ \texttt{annaneuorg@gmail.com}
+  \and Xiaotian Zhou\\ \texttt{xzz5503@psu.edu}}
+\date{October 7, 2026}
 
 \begin{document}
 \maketitle
