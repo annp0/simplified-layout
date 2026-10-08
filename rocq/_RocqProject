@@ -8,6 +8,7 @@ Complete.v
 Separable.v
 Decide.v
 Coarsest.v
+FastScan.v
 Nested.v
 Dense.v
 DenseSort.v

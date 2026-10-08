@@ -21,6 +21,7 @@ named by `ROCQ_SWITCH`.
 | Lemma 2 (separability) | `separable_iff` | `Separable.v` |
 | Lemma 3 (digits as differences of floors) | `dgsum_fsum`, `dgsum_at_weight` | `Chain.v`, `Coarsest.v` |
 | Theorem 1 (linear recognition) | `scan_iff`, `scan_sound_layout`, `scan_coarsest`, `scan_strides` | `Complete.v`, `Shape.v`, `Coarsest.v` |
+| Theorem 1, the `O(n)` bound | `fscan_eq`, `fscan_linear` | `FastScan.v` |
 | The whole of `Decide.strided_form` | `decide_iff` | `Decide.v` |
 | Nested shapes are their leaves, regrouped | `cleaves_onto`, `cleaves_inj`, `nev_flat`, `nflat_flat` | `Nested.v` |
 | `canonical`, `split`, `divide` | `canonical_dense`, `split_correct`, `divide_correct`, `divide_onto`, `divide_inj` | `Ops.v` |
@@ -115,6 +116,16 @@ recomputed from the committed list (`Recognize.resid`). That is the same
 number at every step — it is the paper's own invariant — and it avoids
 modelling the mutation. `Complete.run` is the identical recursion with
 its state exposed, which is what the completeness induction needs.
+
+The paper's scan is written down too, in `FastScan.v`: `rho` an array
+updated one entry at a time, with a counter of reads and writes beside
+it. It returns exactly what `Recognize.scan` returns (`fscan_eq`), so
+every theorem above holds of it, and it touches `rho` at most
+`3 (n - 1)` times (`fscan_linear`): one read per `t`, and fewer than
+`2 (n - 1)` writes in all, because each committed weight is at least
+twice the one before. That is Theorem 1's `O(n)`. The extracted code
+stays `Recognize.scan`; `rho` as a function is the model of an array,
+not a fast one to run.
 
 **Weight 1 is forced into the chain.** `nof T` (the top weight times the
 top radix) telescopes to `n` whatever the chain is, so it is *not* the
