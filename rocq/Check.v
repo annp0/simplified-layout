@@ -6,9 +6,9 @@
     [Decide.fit_axis] accepts on the same enumeration --- the check
     that the MECHANIZED algorithm is the IMPLEMENTED one.
 
-    Run [coq/check.sh] to compare the two. *)
+    Run [rocq/check.sh] to compare the two. *)
 
-From Coq Require Import Arith List ZArith.
+From Stdlib Require Import Arith List ZArith.
 From LayoutAlgebra Require Import Floors Chain Recognize Shape.
 Import ListNotations.
 

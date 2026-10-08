@@ -187,7 +187,7 @@ module Pos =
 
 let rec fold_right f a0 = function
 | Nil -> a0
-| Cons (b, t) -> f b (fold_right f a0 t)
+| Cons (b, l0) -> f b (fold_right f a0 l0)
 
 module Z =
  struct

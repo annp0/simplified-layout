@@ -1,28 +1,25 @@
 #!/bin/sh
 # Compare the MECHANIZED scan with the IMPLEMENTED one.
 #
-# Recognize.scan (Coq) and Decide.fit_axis (OCaml) are two renderings of
+# Recognize.scan (Rocq) and Decide.fit_axis (OCaml) are two renderings of
 # the same algorithm, so they must accept the same maps and recover the
 # same shape. This runs both over every g : [0,n) -> [0,k) with g 0 = 0,
 # for the parameters the paper's evaluation uses, and prints the counts
 # side by side.
 #
-# The Coq side needs a switch with Coq; the OCaml side needs the project
-# switch. Pass them as COQ_SWITCH and OCAML_SWITCH if they differ from
-# the defaults.
+# The Rocq side needs Rocq; the OCaml side needs the project's
+# dependencies. Both are taken from the current environment, or from the
+# opam switches named by ROCQ_SWITCH and OCAML_SWITCH if those are set.
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$root"
 
-COQ_SWITCH=${COQ_SWITCH:-vst-audit}
-OCAML_SWITCH=${OCAML_SWITCH:-$root}
-
-echo "== Coq (Recognize.scan) =="
+echo "== Rocq (Recognize.scan) =="
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 cat > "$tmp/counts.v" <<'EOF'
-From Coq Require Import Arith List ZArith.
+From Stdlib Require Import Arith List ZArith.
 From LayoutAlgebra Require Import Check.
 Import ListNotations.
 Eval vm_compute in (count_total 2 5, count_accepted 2 5).
@@ -33,9 +30,13 @@ Eval vm_compute in (count_total 8 3, count_accepted 8 3).
 Eval vm_compute in (count_total 9 3, count_accepted 9 3).
 Eval vm_compute in recovered 4 [0;1;1]%Z.
 EOF
-( eval "$(opam env --switch="$COQ_SWITCH" --set-switch)"
-  make -C coq >/dev/null
-  coqc -Q coq LayoutAlgebra -w -deprecated "$tmp/counts.v" )
+( if [ -n "${ROCQ_SWITCH-}" ]; then
+    eval "$(opam env --switch="$ROCQ_SWITCH" --set-switch)"
+  fi
+  ( cd rocq
+    rocq makefile -f _RocqProject -o Makefile >/dev/null
+    make >/dev/null )
+  rocq compile -Q rocq LayoutAlgebra -w -deprecated "$tmp/counts.v" )
 
 echo
 echo "== OCaml (Decide.fit_axis) =="
@@ -72,7 +73,9 @@ EOF
 cat > "$tmp/probe/dune" <<'EOF'
 (executable (name probe) (libraries layouts base stdio) (preprocess (pps ppx_jane)))
 EOF
-cp -r "$tmp/probe" ./coq_check_probe
-trap 'rm -rf "$tmp" ./coq_check_probe' EXIT
-( eval "$(opam env --switch="$OCAML_SWITCH" --set-switch)"
-  dune exec ./coq_check_probe/probe.exe )
+cp -r "$tmp/probe" ./rocq_check_probe
+trap 'rm -rf "$tmp" ./rocq_check_probe' EXIT
+( if [ -n "${OCAML_SWITCH-}" ]; then
+    eval "$(opam env --switch="$OCAML_SWITCH" --set-switch)"
+  fi
+  dune exec ./rocq_check_probe/probe.exe )

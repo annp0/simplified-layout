@@ -15,7 +15,7 @@
     emitted; completeness is what makes "decided, not searched" true --
     no simplification is missed. *)
 
-From Coq Require Import Arith Lia ZArith List.
+From Stdlib Require Import Arith Lia ZArith List.
 From LayoutAlgebra Require Import Floors Chain Recognize Shape Complete Separable.
 Import ListNotations.
 
@@ -241,6 +241,35 @@ Qed.
 Lemma scan_one (g : nat -> Z) : scan 1 g = Some [].
 Proof. reflexivity. Qed.
 
+(** A real per-axis layout gives a chain that represents it: drop the
+    radix-1 digits, which a chain cannot carry since its weights
+    strictly increase, and change variables to the floor form. *)
+Lemma chain_of_axis_layout (n : nat) (g : nat -> Z) (T : list (nat * nat * Z)) :
+  (2 <= n)%nat -> wf T -> tsize T = n -> nof T = n ->
+  (forall v, (v < n)%nat -> g v = dgsum T v) ->
+  chain_ok 1%nat 1%nat n (coeffs 0 (drop1 T))
+  /\ Represents n g (coeffs 0 (drop1 T)).
+Proof.
+  intros Hn Hwf Ht Hnof Hval.
+  assert (Hd : drop1 T <> []).
+  { intro H. pose proof (tsize_drop1 T) as Ht1.
+    rewrite H in Ht1. simpl in Ht1. lia. }
+  assert (HwfD : wf (drop1 T)) by (apply wf_drop1; exact Hwf).
+  assert (HnofD : nof (drop1 T) = n)
+    by (rewrite (nof_drop1 T Hwf Hd); exact Hnof).
+  assert (HtD : tsize (drop1 T) = n) by (rewrite tsize_drop1; exact Ht).
+  assert (HhwD : hw (drop1 T) = 1%nat)
+    by (apply (hw_is_one (drop1 T) n); [lia | assumption ..]).
+  split.
+  - apply chain_ok_coeffs.
+    + exact HwfD.
+    + apply drop1_radices_ge2; exact Hwf.
+    + apply (wf_weights_divide (drop1 T) n); assumption.
+    + intros _. rewrite HhwD. split; [apply Nat.divide_refl | lia].
+  - intros v Hv. rewrite (Hval v Hv), <- dgsum_drop1.
+    apply (dgsum_is_fsum (drop1 T) v HwfD). rewrite HnofD; exact Hv.
+Qed.
+
 (** A real per-axis layout is accepted by the scan. *)
 Lemma accept_of_axis_layout (n : nat) (g : nat -> Z) (T : list (nat * nat * Z)) :
   (1 <= n)%nat -> g 0%nat = 0 ->
@@ -251,25 +280,8 @@ Proof.
   intros Hn Hg0 Hwf Ht Hnof Hval.
   destruct (Nat.eq_dec n 1) as [-> | Hne].
   - exists []. apply scan_one.
-  - (* radix-1 digits must go first: a chain's weights strictly increase *)
-    assert (Hd : drop1 T <> []).
-    { intro H. pose proof (tsize_drop1 T) as Ht1.
-      rewrite H in Ht1. simpl in Ht1. lia. }
-    assert (HwfD : wf (drop1 T)) by (apply wf_drop1; exact Hwf).
-    assert (HnofD : nof (drop1 T) = n)
-      by (rewrite (nof_drop1 T Hwf Hd); exact Hnof).
-    assert (HtD : tsize (drop1 T) = n) by (rewrite tsize_drop1; exact Ht).
-    assert (HhwD : hw (drop1 T) = 1%nat)
-      by (apply (hw_is_one (drop1 T) n); assumption).
-    assert (Hch : chain_ok 1%nat 1%nat n (coeffs 0 (drop1 T))).
-    { apply chain_ok_coeffs.
-      - exact HwfD.
-      - apply drop1_radices_ge2; exact Hwf.
-      - apply (wf_weights_divide (drop1 T) n); assumption.
-      - intros _. rewrite HhwD. split; [apply Nat.divide_refl | lia]. }
-    assert (HR : Represents n g (coeffs 0 (drop1 T))).
-    { intros v Hv. rewrite (Hval v Hv), <- dgsum_drop1.
-      apply (dgsum_is_fsum (drop1 T) v HwfD). rewrite HnofD; exact Hv. }
+  - destruct (chain_of_axis_layout n g T ltac:(lia) Hwf Ht Hnof Hval)
+      as [Hch HR].
     exact (scan_complete n g (coeffs 0 (drop1 T)) Hn Hg0 Hch HR).
 Qed.
 

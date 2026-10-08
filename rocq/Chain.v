@@ -16,7 +16,7 @@
     paper's Lemma 3. It then characterizes the floor form by its first
     differences, which is what the scan reads. *)
 
-From Coq Require Import Arith Lia ZArith List.
+From Stdlib Require Import Arith Lia ZArith List.
 From LayoutAlgebra Require Import Floors.
 Import ListNotations.
 

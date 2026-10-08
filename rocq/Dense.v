@@ -18,7 +18,7 @@
     the first mode off a dense layout leaves a layout that is dense
     only after scaling by that mode's size. *)
 
-From Coq Require Import Arith Lia ZArith List.
+From Stdlib Require Import Arith Lia ZArith List.
 Import ListNotations.
 
 (** ** Modes, coordinates, and the index function *)

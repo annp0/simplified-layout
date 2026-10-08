@@ -24,7 +24,7 @@
     FORCED --- there is nothing to search for, they are read off the
     unit coordinates. *)
 
-From Coq Require Import Arith Lia ZArith List.
+From Stdlib Require Import Arith Lia ZArith List.
 From LayoutAlgebra Require Import Floors Chain Recognize Shape.
 Import ListNotations.
 

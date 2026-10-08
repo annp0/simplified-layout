@@ -17,7 +17,7 @@
     its two divisibility checks are exactly the chain conditions --- it
     cannot reject. *)
 
-From Coq Require Import Arith Lia ZArith List Bool.
+From Stdlib Require Import Arith Lia ZArith List Bool.
 From LayoutAlgebra Require Import Floors Chain Recognize.
 Import ListNotations.
 
@@ -204,4 +204,124 @@ Proof.
   intros Hn Hg0. split.
   - intros [ws [Hch HR]]. eapply scan_complete; eassumption.
   - intros [ws' Hscan]. exists ws'. now apply scan_sound.
+Qed.
+
+(** ** Which weights the scan records
+
+    [run_complete] only says the scan finishes. Its induction shows
+    more: the scan commits at exactly the weights of the given chain,
+    in order, with exactly its coefficients. [run_exact] keeps that
+    information. Weights at or above the end of the walk are never
+    visited, so only the part of the chain below it is recorded. *)
+
+Definition below (b : nat) (ws : list (nat * Z)) : list (nat * Z) :=
+  filter (fun p => Nat.ltb (fst p) b) ws.
+
+Lemma below_ge (b : nat) (ws : list (nat * Z)) :
+  Forall (fun p => (b <= fst p)%nat) ws -> below b ws = [].
+Proof.
+  induction ws as [| [w a] ws IH]; intros H; [reflexivity |].
+  inversion H as [| ? ? Hh Ht]; subst. simpl in Hh |- *.
+  destruct (Nat.ltb_spec w b); [lia | exact (IH Ht)].
+Qed.
+
+Lemma run_exact :
+  forall steps n h t wlast acc ws,
+    (1 <= t)%nat -> (1 <= wlast)%nat -> (t + steps <= n)%nat ->
+    (forall t', (1 <= t')%nat -> (t' < n)%nat ->
+       h t' = dsum (acc ++ ws) t') ->
+    chain_ok wlast t n ws ->
+    Forall (fun p => snd p <> 0) ws ->
+    exists wl, run n h steps t wlast acc
+               = Some ((t + steps)%nat, wl, acc ++ below (t + steps) ws).
+Proof.
+  induction steps as [| steps IH];
+    intros n h t wlast acc ws Ht Hwlast Hsteps Hrep Hch Hnz.
+  - (* nothing visited: every weight of the chain is at least t *)
+    exists wlast. simpl. rewrite Nat.add_0_r.
+    rewrite below_ge by (eapply chain_ok_weights_ge; exact Hch).
+    now rewrite app_nil_r.
+  - assert (Htn : (t < n)%nat) by lia.
+    assert (Hres : resid h acc t = dsum ws t).
+    { unfold resid. rewrite (Hrep t Ht Htn), dsum_app. ring. }
+    replace (t + S steps)%nat with (S t + steps)%nat by lia.
+    destruct ws as [| [w a] ws'].
+    + simpl in Hres. simpl. rewrite Hres. simpl.
+      apply (IH n h (S t) wlast acc []);
+        [lia | lia | lia | exact Hrep | exact I | constructor].
+    + simpl in Hch. destruct Hch as [Hdw [Hdn [Hlow Hch']]].
+      assert (Hge' : Forall (fun p => (S w <= fst p)%nat) ws')
+        by (apply (chain_ok_weights_ge w (S w) n); exact Hch').
+      destruct (Nat.eq_dec w t) as [-> | Hne].
+      * (* t is the next weight: it is recorded, with its coefficient *)
+        assert (Hrest0 : dsum ws' t = 0).
+        { apply dsum_above; [lia |].
+          eapply Forall_impl; [| exact Hge']. simpl. lia. }
+        assert (Hresa : resid h acc t = a).
+        { rewrite Hres. simpl.
+          rewrite divides_ind_self by lia. rewrite Hrest0. ring. }
+        assert (Hane : a <> 0) by (inversion Hnz as [| ? ? Hh ?]; exact Hh).
+        simpl. rewrite Hresa.
+        destruct (Z.eqb_spec a 0) as [Heq0 | _]; [contradiction |].
+        assert (Hmn : (n mod t = 0)%nat)
+          by (apply Nat.Lcm0.mod_divide; exact Hdn).
+        assert (Hmw : (t mod wlast = 0)%nat)
+          by (apply Nat.Lcm0.mod_divide; exact Hdw).
+        rewrite Hmn, Hmw. simpl.
+        destruct (IH n h (S t) t (acc ++ [(t, a)]) ws') as [wl Hrun];
+          [lia | lia | lia | | exact Hch' | inversion Hnz; assumption |].
+        { intros t' H1 H2. rewrite <- app_assoc. now apply Hrep. }
+        exists wl. rewrite Hrun. f_equal. f_equal.
+        rewrite <- app_assoc. simpl.
+        destruct (Nat.ltb_spec t (S (t + steps))); [reflexivity | lia].
+      * (* t is not a weight: nothing is recorded *)
+        assert (Hzero : dsum ((w, a) :: ws') t = 0).
+        { apply dsum_above; [lia |].
+          constructor; simpl; [lia |].
+          eapply Forall_impl; [| exact Hge']. simpl. lia. }
+        simpl. rewrite Hres, Hzero. simpl.
+        apply (IH n h (S t) wlast acc ((w, a) :: ws'));
+          [lia | lia | lia | | | exact Hnz].
+        -- intros t' H1 H2. now apply Hrep.
+        -- simpl. repeat split; try assumption. lia.
+Qed.
+
+(** The scan's output is determined by ANY chain that represents [g]:
+    it is that chain's entries with nonzero coefficient, below [n]. *)
+Theorem scan_exact (n : nat) (g : nat -> Z) (ws : list (nat * Z)) :
+  (1 <= n)%nat -> g 0%nat = 0 ->
+  chain_ok 1%nat 1%nat n ws -> Represents n g ws ->
+  scan n g = Some (below n (nzs ws)).
+Proof.
+  intros Hn Hg0 Hch HR.
+  assert (Hpos : weights_pos ws)
+    by (eapply chain_ok_weights_pos; [apply Nat.le_refl | exact Hch]).
+  assert (Hdiff : forall t, (1 <= t)%nat -> (t < n)%nat ->
+            first_diff g t = dsum ws t).
+  { intros t H1 H2. unfold first_diff.
+    apply (proj1 (represents_iff n g ws Hg0 Hpos) HR t H1 H2). }
+  unfold scan. rewrite scan_from_run.
+  destruct (run_exact (n - 1)%nat n (first_diff g) 1%nat 1%nat [] (nzs ws))
+    as [wl Hrun];
+    [lia | lia | lia | | apply chain_ok_nzs; exact Hch | apply nzs_nonzero |].
+  - intros t' H1 H2. simpl. rewrite dsum_nzs. now apply Hdiff.
+  - rewrite Hrun. simpl. do 2 f_equal. lia.
+Qed.
+
+(** Hence minimality: every chain that represents [g] contains the
+    weights the scan records. *)
+Corollary scan_minimal (n : nat) (g : nat -> Z) (ws ws' : list (nat * Z)) :
+  (1 <= n)%nat -> g 0%nat = 0 ->
+  chain_ok 1%nat 1%nat n ws -> Represents n g ws ->
+  scan n g = Some ws' ->
+  forall w, In w (map fst ws') -> In w (map fst ws).
+Proof.
+  intros Hn Hg0 Hch HR Hscan w Hw.
+  rewrite (scan_exact n g ws Hn Hg0 Hch HR) in Hscan.
+  injection Hscan as <-.
+  apply in_map_iff in Hw. destruct Hw as [p [<- Hp]].
+  unfold below, nzs in Hp.
+  apply filter_In in Hp. destruct Hp as [Hp _].
+  apply filter_In in Hp. destruct Hp as [Hp _].
+  now apply in_map.
 Qed.

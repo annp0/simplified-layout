@@ -17,7 +17,7 @@
     returns is a chain of divisors of [n] and [g] really is that
     floor form on [[0, n)]. *)
 
-From Coq Require Import Arith Lia ZArith List.
+From Stdlib Require Import Arith Lia ZArith List.
 From LayoutAlgebra Require Import Floors Chain.
 Import ListNotations.
 

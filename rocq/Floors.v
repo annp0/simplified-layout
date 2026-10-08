@@ -13,7 +13,7 @@
     Indices are natural numbers and strides are integers, so the
     statements mix the two; everything is pushed through [Z.of_nat]. *)
 
-From Coq Require Import Arith Lia ZArith.
+From Stdlib Require Import Arith Lia ZArith.
 
 Open Scope Z_scope.
 

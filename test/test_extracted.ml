@@ -1,6 +1,6 @@
 (* The extracted scan against the implementation.
 
-   coq/check.sh compares COUNTS computed inside Coq, which cannot reach
+   rocq/check.sh compares COUNTS computed inside Rocq, which cannot reach
    n = 12: nat is unary and vm_compute over 177,147 maps is too slow.
    Extraction moves the verified scan into OCaml, so here the two run
    side by side over the whole enumeration the paper quotes, and are

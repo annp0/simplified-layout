@@ -32,6 +32,7 @@ otherwise.
                           from the SM80 fragment, a GEMM mainloop built from the operations alone
       test_simplifier     the decision procedure against brute force, and on random layouts
       test_usage_table    every formula of the paper's usage table, built as printed
+    rocq/                 the mechanized proofs
     papers/
       layout-algebra/     the paper: layout-algebra.tex inputs sections/ and figures/
       archive/            earlier single-file drafts, kept for reference
@@ -44,16 +45,16 @@ otherwise.
 
 ## Mechanized proofs
 
-The paper's two theorems are proved in Coq under `coq/` --- Lemma 1
-(dense bijections) and Theorem 1 (linear recognition), both as "if and
-only if", with no axioms and no admitted goals:
+The paper's lemmas and theorem, the decision procedure as a whole, and what
+Section 3 claims of each operation are proved in Rocq under `rocq/`, with no
+axioms and no admitted goals:
 
-    make -C coq          # build the proofs
-    ./coq/check.sh       # the mechanized scan vs. Decide.fit_axis
+    (cd rocq && rocq makefile -f _RocqProject -o Makefile && make)
+    ./rocq/check.sh      # the mechanized scan vs. Decide.fit_axis
 
-`coq/check.sh` runs both renderings of the scan over every
+`rocq/check.sh` runs both renderings of the scan over every
 `g : [0,n) -> [0,k)` with `g 0 = 0` and checks they accept the same maps
-and recover the same shape. See `coq/README.md` for the correspondence
+and recover the same shape. See `rocq/README.md` for the correspondence
 with the paper and for what is not covered.
 
 ## The paper's numbers

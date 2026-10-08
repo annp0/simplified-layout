@@ -7,6 +7,12 @@ Shape.v
 Complete.v
 Separable.v
 Decide.v
+Coarsest.v
+Nested.v
 Dense.v
+DenseSort.v
+Ops.v
+Swizzle.v
+Inverse.v
 Check.v
 Extraction.v

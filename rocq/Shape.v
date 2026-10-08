@@ -10,7 +10,7 @@
     The result is [scan_sound_layout]: if the scan accepts, [g] really
     is the index function of a flat shape of size [n]. *)
 
-From Coq Require Import Arith Lia ZArith List.
+From Stdlib Require Import Arith Lia ZArith List.
 From LayoutAlgebra Require Import Floors Chain Recognize.
 Import ListNotations.
 
