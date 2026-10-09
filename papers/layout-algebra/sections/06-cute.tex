@@ -2,7 +2,8 @@
 
 CuTe lists the modes of a layout with the first varying fastest; we reverse
 the list, recursively, and the two then agree as functions on the same
-integers. CuTe's $\mathrm{composition}(A,B)$ applies $B$ first and is
+integers. Layouts quoted from CuTe's documentation are written in CuTe's
+order and marked as such; all others are in ours. CuTe's $\mathrm{composition}(A,B)$ applies $B$ first and is
 $A \circ B$ in our algebra, with $B$ the right operand of
 Definition~\ref{def:compose}. We take the four operations in the order of
 Section~\ref{sec:intro}, state what each is in our algebra, and name the
@@ -16,6 +17,7 @@ is a dense bijection onto $[0,\size A)$, and Theorem~\ref{thm:decide} decides
 whether it is a layout. For such a $B$, when CuTe's composition exists the
 two are the same function, so Theorem~\ref{thm:decide} accepts and returns
 the coarsest shape that realizes it. Checked on the three documented examples,
+in CuTe's order,
 \begin{align*}
 \mathrm{composition}\big((6,2){:}(8,2),\,(4,3){:}(3,1)\big)
   &= \big((2,2),3\big){:}\big((24,2),8\big),\\
@@ -47,7 +49,8 @@ decided by Lemma~\ref{lem:dense}. Checked on the six documented complements:
 $\divideop(\mathrm{canonical}(24), (4))$ has tile $4{:}1$ and rest $6{:}4$,
 which are $(4{:}1)^{*}_{24}$ and $(6{:}4)^{*}_{24}$;
 $\divideop(\mathrm{canonical}((12,2)), (4,1))$ has tile $4{:}2$ and rest
-$(3,2){:}(8,1)$, which is $(4{:}2)^{*}_{24} = (2,3){:}(1,8)$; and all six
+$(3,2){:}(8,1)$, which is $(4{:}2)^{*}_{24} = (2,3){:}(1,8)$ in CuTe's
+order; and all six
 pairs $(B, B^{*}_{24})$ are bijections onto $[0,24)$.
 
 \paragraph{Division.} In CuTe, $A / B = A \circ (B, B^{*}_{\size A})$. In our
@@ -60,7 +63,8 @@ whose right operand is a regrouping of the identity on $[0,\size A)$ and so a
 dense bijection onto it. For a tile given as a layout $B$ it is the composite
 $A \circ (B, B^{*}_{\size A})$ itself: $(B, B^{*}_{\size A})$ is a bijection
 onto $[0,\size A)$, so Definition~\ref{def:compose} applies with no further
-condition. Checked, as functions, on the documented strided tiler,
+condition. Checked, as functions, on the documented strided tiler, in
+CuTe's order,
 \[
 (4,2,3){:}(2,1,8) \mathbin{/} 4{:}2 =
 \big((2,2),(2,3)\big){:}\big((4,1),(2,8)\big).
@@ -86,10 +90,10 @@ its address and coloured by the copy it belongs to, $A$ is
 and the two products are, with the element $(i,j)$ of $A$ as the row and the
 copy $k$ as the column,
 \input{figures/cute-product-comparison}
-In CuTe the copy offsets are $A^{*}_{24} = (2,3){:}(2,8)$, that is
-$0, 2, 8, 10, 16, 18$, and
+In CuTe the copy offsets are $A^{*}_{24} = (2,3){:}(2,8)$ in CuTe's order,
+that is $(3,2){:}(8,2)$ in ours, taking $0, 2, 8, 10, 16, 18$, and
 \[
-A \otimes B = \big((2,2),(2,3)\big){:}\big((4,1),(2,8)\big)
+A \otimes B = \big((2,2),(3,2)\big){:}\big((4,1),(8,2)\big)
 \]
 is a bijection onto $[0,24)$. In our algebra the copy offsets are the multiples of
 $\cosize A = 6$, and $\repeatop(A,B) = (6,(2,2)){:}(6,(4,1))$ is injective and

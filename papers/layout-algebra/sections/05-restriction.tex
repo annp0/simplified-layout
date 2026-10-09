@@ -31,7 +31,8 @@ $f|_p - f|_p(\mathbf{0})$, which vanishes at the origin, plus the constant
 $f|_p(\mathbf{0})$; when that map is not a layout, the composite's expression
 is emitted with the fixed coordinates replaced by their values. The difference
 can take negative values, which is why Section~\ref{sec:decide} is stated
-over $\Z$: for $(2,2){:}(2,1)$ under the swizzle $\{1;1;0\}$,
+over $\Z$: for $(2,2){:}(2,1)$ under the swizzle with $b = 1$, $\mathit{src} = 1$, $\mathit{dst} = 0$
+(Definition~\ref{def:swizzle}), that is $\sigma(x) = x \oplus ((x \gg 1) \wedge 1)$,
 $f(a,b) = (2a+b) \oplus a$, fixing $a = 1$ gives $f|_p(b) = 3 - b$ and
 $f|_p - f|_p(\mathbf{0}) = -b$. The emitted arithmetic then carries a negative
 coefficient. For
