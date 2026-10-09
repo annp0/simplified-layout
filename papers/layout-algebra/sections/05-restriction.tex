@@ -37,14 +37,3 @@ $f|_p - f|_p(\mathbf{0}) = -b$. The emitted arithmetic then carries a negative
 coefficient. For
 $f = (4,8,4){:}(32,1,8)$, $F = \{1\}$ and $p_1 = 2$, the slice is
 $f|_p(r,v) = 64 + r + 8v$.
-
-A slice is decided for one fixed $p$, and different $p$ can give slices of
-different forms. The thread-value map $(6,4){:}(4,1)$ composed onto the
-storage map $(4,6){:}(8,1)$ is not a layout, and its slices for threads $0$,
-$1$ and $2$ are $4{:}1$, $4 + (2,2){:}(4,1)$ and $10 + 4{:}1$. The
-per-slice expression is therefore emitted only when $p$ is known at code
-generation time. When $p$ is known only at run time, as a thread index is,
-the code emitted is that of the unrestricted map, with the fixed coordinates
-read at run time. If the unrestricted map is a layout nothing is lost by
-this: every slice is then the same layout of the free coordinates, offset by
-the contribution of the fixed ones.

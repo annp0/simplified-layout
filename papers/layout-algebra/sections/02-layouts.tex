@@ -89,10 +89,12 @@ of a convolution, where neighbouring windows share some elements and not
 others, is therefore not valid. Such read-only overlaps are outside the scope
 of this paper.
 
-Whether a layout is a dense bijection can be decided without enumeration.
+When a layout's output is a logical or thread-value index, being valid means
+being a dense bijection. This need not be checked by enumerating coordinates:
+whether a layout is a dense bijection depends only on its sizes and strides.
 
 \begin{lemma}[Dense bijections]\label{lem:dense}
-Let $L$ be a layout with no stride $\bot$, its modes carrying sizes
+Let $L$ be a flat layout with no stride $\bot$, its modes carrying sizes
 $n_1,\dots,n_k$ and strides $s_1,\dots,s_k$ with every $n_i \ge 2$, and put
 $N = \prod_i n_i$. Then $L$ is a dense bijection onto $[0,N)$ if and only if,
 after sorting the modes by stride, $s_{(1)} = 1$ and
@@ -100,19 +102,25 @@ $s_{(j+1)} = s_{(j)}\,n_{(j)}$ for every $j$: the sorted strides are the
 running products of the sorted sizes.
 \end{lemma}
 
+The two restrictions cost nothing. A mode of size $1$ only ever takes the
+index $0$, so it contributes nothing and is dropped beforehand; a nested layout
+is read through the flat layout of its leaves.
+
 \begin{proof}
 ($\Leftarrow$) With running-product strides the map is the flattening of
 Definition~\ref{def:layout} for the shape $(n_{(k)},\dots,n_{(1)})$, a
 bijection onto $[0,N)$.
-Positions of size $1$ contribute nothing and are dropped beforehand.
 
-($\Rightarrow$) Sort the modes by stride and write $N_j = \prod_{i \le j} n_{(i)}$
+($\Rightarrow$) No stride is negative: index $1$ at a mode of negative stride,
+and $0$ elsewhere, would put a negative value in the image. Sort the modes by
+stride and write $N_j = \prod_{i \le j} n_{(i)}$
 (so $N_0 = 1$). \emph{Claim:} $s_{(j)} \le N_{j-1}$ for every $j$. Every image
 value below $s_{(j)}$ comes from a coordinate supported on modes
 $1,\dots,j{-}1$, since a nonzero index at any later mode contributes at
 least $s_{(j)}$ and no contribution is negative; those modes produce at
-most $N_{j-1}$ distinct values, so surjectivity onto $[0,s_{(j)})$ forces
-$s_{(j)} \le N_{j-1}$. Consequently
+most $N_{j-1}$ distinct values, so surjectivity onto
+$[0,\min(s_{(j)},N))$ forces $\min(s_{(j)},N) \le N_{j-1}$, and as
+$N_{j-1} < N$ this is $s_{(j)} \le N_{j-1}$. Consequently
 \[
 \textstyle\sum_j (n_{(j)}-1)\,s_{(j)} \;\le\; \sum_j (n_{(j)}-1)\,N_{j-1}
 \;=\; N - 1,

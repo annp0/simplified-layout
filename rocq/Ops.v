@@ -382,7 +382,7 @@ Fixpoint replica (L : omodes) (c c' : list nat) : Prop :=
   | _, _, _ => False
   end.
 
-(** Definition 5, for a layout into physical space. *)
+(** Definition 7, for a layout into physical space. *)
 Definition valid (L : omodes) : Prop :=
   forall c c', ocoord_ok L c -> ocoord_ok L c' -> oev L c = oev L c' -> replica L c c'.
 

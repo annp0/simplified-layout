@@ -1,7 +1,8 @@
 \section{Operations}\label{sec:ops}
 
-We define the following operations. Each takes a layout $L$, and where a second
-argument is needed it is written out; $S$ ranges over shapes and $A$ over
+We define the following operations. Each takes a layout $L$, except
+$\mathrm{canonical}$, which takes a shape, and where a second argument is
+needed it is written out; $S$ ranges over shapes and $A$ over
 layouts.
 
 \begin{description}
@@ -65,7 +66,7 @@ $(\size L)\,A(a) + L(v)$ take every value in $[0, \size A \cdot \size L)$
 exactly once: the result is a dense bijection.
 
 When $L$ carries a swizzle $\sigma$, $\repeatop$ is defined only if $\cosize L$
-is a power of two and both fields of $\sigma$ lie below it. Then
+is a power of two, $2^p$, and both fields of $\sigma$ lie below bit $p$. Then
 $\sigma\big((\cosize L)\,a + x\big) = (\cosize L)\,a + \sigma(x)$ and every
 copy is swizzled alike. Otherwise the copy index reaches the bits $\sigma$
 reads, and the operation rejects.
@@ -90,16 +91,18 @@ and rejects.
 \[
 \broadcast(L,S) \;=\; (S, S_L) \;{:}\; (\bot,\ D_L),
 \]
-writing $\bot$ for a stride of $\bot$ at every entry of $S$. The coordinate
+writing $\bot$ for the stride with $\bot$ at every entry of $S$. The coordinate
 $(a,v)$ lands at $L(v)$ whatever $a$ is. The second argument is a shape and not
 a layout because the copies share their addresses and so have no strides to
-carry. The result is valid but not write-valid.
+carry. The result is valid when $L$ is, and not write-valid once
+$\size S \ge 2$.
 \par\smallskip
 \input{figures/ops-broadcast}
 
 
-\item[$\mathrm{inverse}(L)$] for $L$ a dense bijection with modes
-$(n_1,\dots,n_m){:}(d_1,\dots,d_m)$. Give mode $i$ the canonical weight
+\item[$\mathrm{inverse}(L)$] for $L$ a flat dense bijection with modes
+$(n_1,\dots,n_m){:}(d_1,\dots,d_m)$, every $n_i \ge 2$; as in
+Lemma~\ref{lem:dense}, modes of size $1$ are dropped first. Give mode $i$ the canonical weight
 $w_i = \prod_{j>i} n_j$ and list the modes in decreasing order of stride. Then
 \[
 \mathrm{inverse}(L) \;=\;

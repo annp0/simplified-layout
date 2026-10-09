@@ -15,7 +15,7 @@ coordinates of the $S_i$; write $\mathrm{Coord}(S)$ for the set of them. A
 \emph{layout} $S{:}D$ is a shape $S$ together with a \emph{stride} $D$ of the
 same structure: an integer where $S$ is a positive integer, and a tuple
 $(D_1,\dots,D_k)$ where $S$ is $(S_1,\dots,S_k)$. Its index function
-$\mathrm{Coord}(S) \to \N$ is defined by recursion on the shape,
+$\mathrm{Coord}(S) \to \Z$ is defined by recursion on the shape,
 \[
 (n{:}d)(i) = i\,d,
 \qquad
@@ -48,9 +48,9 @@ imagine it. They are a natural way to abstract and describe those mappings.
 
 The algebra has four operations. Three of them, composition, complement and
 logical division, are formalized by Shah~\cite{shah}; the fourth, logical
-product, we take from the CUTLASS implementation. In stating them we follow
+product, we take from the CUTLASS implementation. We follow
 Shah's notation, which lists modes as CuTe does, indexed from $0$ with the
-first varying fastest; Section~\ref{sec:cute} relates that order to the
+first varying fastest. Section~\ref{sec:cute} relates that order to the
 row-major one of Definition~\ref{def:layout}. The \emph{complement} of a
 layout
 $B = (N_0,\dots,N_\alpha){:}(d_0,\dots,d_\alpha)$, sorted by stride, with
@@ -88,22 +88,20 @@ $M_i$, and what remains after $r$ must be weakly left divisible by $N$. One
 more is required across modes, that the intervals on which they act be pairwise
 disjoint~\cite{shah}.
 
-None of these conditions appears in the CuTe API, and CUTLASS does not in
-general check them. Composition's two divisibility conditions are written in
-its source twice over: in a strong form that is commented out, and in a weak
-form that runs only when both operands are statically known. The runtime
-assertion for the dynamic case is commented out as well, and the reason is
-given there: it ``can cause extra registers and inappropriate
-compile-time/run-time failure''. The complement's conditions are not checked
-at all; its shape entries are integer quotients, and what is asserted is only
-that they do not come out zero. The consequence is silence rather than a
-diagnostic. Sweeping the \cuteCompTotal{} rank-2 layouts and cotargets of
-Section~\ref{sec:eval}, all of them static, so this is the case CuTe
-\emph{can} check, the complement meets its own documented postconditions for
-every one of the \cuteCompSatisfied{} that satisfy both divisibility
-conditions, and fails for \cuteCompViolatedBroken{} of the
-\cuteCompViolated{} that do not, with no compile-time error, no assertion,
-and no run-time signal.
+However, none of these conditions is part of the interface, and CuTe checks
+few of them: composition's divisibility is checked only at compile time, when
+both operands are static, and the complement checks only that each of its
+quotients is at least $1$. Where a condition fails, the result can be wrong
+without a diagnostic. For example, $B = (2,2){:}(1,3)$ has no complement for
+$M = 24$: $B$ takes the values $0,1,3,4$, and no shifted copy of it covers $2$
+without overlapping $B$. CuTe applies the formula anyway, truncating
+$d_1/N_0d_0 = 3/2$ to $1$, and returns a complement that together with $B$
+covers only $16$ of the $24$ values; compiled against CUTLASS~4.8, this raises
+no error. Running the complement on every static rank-2 layout
+$(N_0,N_1){:}(d_0,d_1)$ with $N_0, N_1 \in \{2,3,4\}$, $d_0 \in \{1,2\}$ and
+$d_1 \le 16$, at $M \in \{12,24,48\}$, we found \cuteCompViolatedBroken{} such
+cases: a divisibility condition fails, and CuTe returns a complement that
+violates the postconditions of its own unit test, without an error.
 
 We try to resolve those complexities by restricting what a layout can be.
 

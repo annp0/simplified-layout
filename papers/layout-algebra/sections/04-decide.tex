@@ -55,12 +55,12 @@ backwards gives $f = (S_1,\dots,S_m){:}(D_1,\dots,D_m)$.
 
 Checking \eqref{eq:sep} is one pass over $\mathrm{Coord}(S)$. What remains
 is one coordinate at a time: a map $g : [0,n) \to \Z$ with $g(0) = 0$, and
-the question whether there are a flat shape $T$ of size $n$ and a stride $D$
+the question whether there is a flat shape $T$ of size $n$ and a stride $D$
 with $g = (T{:}D) \circ \mathrm{unflatten}_T$. To decide it we need this
 composite as a formula in $v$.
 
 Number the entries of $T$ from the right, $T = (m_k,\dots,m_1)$, so that
-indices increase with the strides below. By Definition~\ref{def:layout},
+indices increase with the weights $w_j$ below. By Definition~\ref{def:layout},
 $\mathrm{unflatten}_T(v)$ is the coordinate $(x_k,\dots,x_1)$ of $T$ with
 \[
 v = \sum_{j=1}^{k} x_j\, w_j, \qquad w_j = m_1 m_2 \cdots m_{j-1},

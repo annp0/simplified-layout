@@ -15,5 +15,6 @@ DenseSort.v
 Ops.v
 Swizzle.v
 Inverse.v
+Digits.v
 Check.v
 Extraction.v

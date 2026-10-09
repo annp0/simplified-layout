@@ -46,13 +46,13 @@ raw=$(for exe in _build/default/test/test_*.exe; do "$exe"; done)
 lib_lines=$(cat lib/*.ml | wc -l | tr -d " ")
 lib_mli_lines=$(cat lib/*.mli | wc -l | tr -d " ")
 test_lines=$(cat test/*.ml | wc -l | tr -d " ")
-coq_lines=$(cat coq/*.v | wc -l | tr -d " ")
+rocq_lines=$(cat rocq/*.v | wc -l | tr -d " ")
 
 printf '%s\n' "$raw" | awk \
   -v lib_lines="$lib_lines" \
   -v lib_mli_lines="$lib_mli_lines" \
   -v test_lines="$test_lines" \
-  -v coq_lines="$coq_lines" '
+  -v rocq_lines="$rocq_lines" '
 # 186293 -> 186{,}293, the thousands separator the paper writes by hand
 function group(v,   t, r) {
   t = v ""
@@ -65,7 +65,7 @@ function group(v,   t, r) {
 }
 
 BEGIN {
-  order = "lib.lines lib.mli_lines test.lines coq.lines " \
+  order = "lib.lines lib.mli_lines test.lines rocq.lines " \
           "emit.total emit.affine emit.digits emit.pipeline " \
           "dense.random " \
           "pairs.trials pairs.affine pairs.strided " \
@@ -79,7 +79,7 @@ BEGIN {
   macro["lib.lines"]                   = "evalLibLines"
   macro["lib.mli_lines"]               = "evalLibMliLines"
   macro["test.lines"]                  = "evalTestLines"
-  macro["coq.lines"]                   = "evalCoqLines"
+  macro["rocq.lines"]                  = "evalRocqLines"
   macro["emit.total"]                  = "evalLayouts"
   macro["emit.affine"]                 = "evalLayoutsAffine"
   macro["emit.digits"]                 = "evalLayoutsRefined"
@@ -110,7 +110,7 @@ END {
   sum["lib.lines"] = lib_lines;         seen["lib.lines"] = 1
   sum["lib.mli_lines"] = lib_mli_lines; seen["lib.mli_lines"] = 1
   sum["test.lines"] = test_lines;       seen["test.lines"] = 1
-  sum["coq.lines"] = coq_lines;         seen["coq.lines"] = 1
+  sum["rocq.lines"] = rocq_lines;       seen["rocq.lines"] = 1
 
   n = split(order, keys, " ")
   for (i = 1; i <= n; i++)

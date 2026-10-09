@@ -1,7 +1,8 @@
 # Mechanized proofs
 
 Rocq proofs of the paper's lemmas and theorem, of the decision procedure as
-a whole, and of what Section 3 claims of each operation. Everything is
+a whole, and of what Section 3 claims of each operation. The paper's
+evaluation points here for the correspondence; the table below is it. Everything is
 proved: no `Admitted`, no `Axiom`, and `Print Assumptions` reports *Closed
 under the global context* for each main result. Checked with Rocq 9.0.1 and
 9.1.1.
@@ -20,7 +21,9 @@ named by `ROCQ_SWITCH`.
 | Lemma 1 (dense bijections) | `dense_iff_running_general` | `Dense.v`, `DenseSort.v` |
 | Lemma 2 (separability) | `separable_iff` | `Separable.v` |
 | Lemma 3 (digits as differences of floors) | `dgsum_fsum`, `dgsum_at_weight` | `Chain.v`, `Coarsest.v` |
-| Theorem 1 (linear recognition) | `scan_iff`, `scan_sound_layout`, `scan_coarsest`, `scan_strides` | `Complete.v`, `Shape.v`, `Coarsest.v` |
+| Theorem 1 (linear recognition), as stated: layout of a flat shape ⇔ the scan accepts | `scan_iff_layout` | `Digits.v` |
+| Theorem 1, over floor sums, and its shape: coarsest, strides `g(w_j)` | `scan_iff`, `scan_sound_layout`, `scan_coarsest`, `scan_strides` | `Complete.v`, `Shape.v`, `Coarsest.v` |
+| Section 4's rewriting of Definition 1, read through `unflatten`, as digits | `zev_digits`, `triples_of` | `Digits.v` |
 | Theorem 1, the `O(n)` bound | `fscan_eq`, `fscan_linear` | `FastScan.v` |
 | The whole of `Decide.strided_form` | `decide_iff` | `Decide.v` |
 | Nested shapes are their leaves, regrouped | `cleaves_onto`, `cleaves_inj`, `nev_flat`, `nflat_flat` | `Nested.v` |
@@ -137,7 +140,27 @@ one the OCaml comment names: for `g v = v / 2` on `n = 4` the scan
 reports only weight 2, and the shape is `(2, 2)` with strides `(0, 1)`.
 
 **`inverse` assumes every size is at least two**, as Lemma 1's core does:
-a mode of size 1 is dropped beforehand.
+a mode of size 1 is dropped beforehand. Section 3 of the paper says so.
+
+**Strides are non-negative outside Section 4.** `Dense.v`, `Ops.v` and
+`Inverse.v` take strides in `nat`; Section 4 (`Chain.v` onwards, and
+`Digits.v`) takes them in `Z`, as the paper does. For Lemma 1 nothing is
+lost: a zero or negative stride on a mode of size at least two is never a
+dense bijection, and the sorted strides then never start at 1, so both
+sides are false; the proof assumes `strides_pos` instead of proving that
+case. For `split` and `divide`, a negative stride is not covered.
+
+**`broadcast` carries the two hypotheses the paper states:** `L` valid,
+for `broadcast_valid`, and some copy count at least two, for
+`broadcast_not_write_valid` (`broadcast(L, 1)` is `L` itself).
+
+**Theorem 1's statement is assembled.** The core results are about the
+digit sum `Chain.dgsum`. `Digits.zev_digits` proves that Definition 1's
+index function, read through Definition 1's row-major `unflatten`, is that
+digit sum, and `Digits.triples_of` that every shape the scan builds is one
+of Definition 1's flat shapes; `scan_iff_layout` puts them together with
+`Shape.scan_sound_layout` and `Decide.accept_of_axis_layout` into the
+theorem as the paper words it.
 
 ## Extraction
 
@@ -205,3 +228,8 @@ short-circuits to for `n = 1`).
   the tests check its examples.
 - **The implementation** beyond the scan: the OCaml operations and
   emitter are checked by the tests against enumeration, not proved.
+- **Composition** (Definition 5) and the declared replicas of a composite
+  (Definition 6): no theorem of the paper is about them, and they are
+  not modelled. Nor are three small claims of Section 3: the nested-shape
+  rule for `canonical`, `split(n:⊥, S)`, and `inverse` with modes of
+  size 1 left in.
